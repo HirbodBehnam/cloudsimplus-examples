@@ -2,6 +2,8 @@ package org.cloudsimplus.examples.lowpower;
 
 import java.util.Random;
 
+import org.cloudsimplus.distributions.PoissonDistr;
+
 public final class LowPower {
     public static final int SCHEDULE_TIME_TO_PROCESS_DATACENTER_EVENTS = 5;
 
@@ -23,10 +25,11 @@ public final class LowPower {
 
     public static final double CLOUDLET_CPU_USAGE_PERCENT = 0.75;
 
-    public static final int DATACENTERS = 2;
-    public static final int HOSTS = 100;
-    public static final int VMS = HOSTS * DATACENTERS;
-    public static final int CLOUDLETS = 10000;
+    public static final int    DATACENTERS = 2;
+    public static final int    HOSTS = 100;
+    public static final int    VMS = HOSTS * DATACENTERS;
+    public static final int    CLOUDLETS = 10;
+    public static final double FAIL_PROBABILITY = 0.01;
 
     public static final String CUSTOMER_SLA_CONTRACT = "CustomerSLA.json";
 

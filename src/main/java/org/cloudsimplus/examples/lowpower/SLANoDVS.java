@@ -5,12 +5,14 @@ import org.cloudsimplus.brokers.DatacenterBroker;
 import org.cloudsimplus.brokers.DatacenterBrokerSimple;
 import org.cloudsimplus.builders.tables.CloudletsTableBuilder;
 import org.cloudsimplus.cloudlets.Cloudlet;
+import org.cloudsimplus.cloudlets.Cloudlet.Status;
 import org.cloudsimplus.cloudlets.CloudletSimple;
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
 import org.cloudsimplus.datacenters.DatacenterSimple;
 import org.cloudsimplus.hosts.Host;
 import org.cloudsimplus.hosts.HostSimple;
+import org.cloudsimplus.listeners.CloudletVmEventInfo;
 import org.cloudsimplus.power.models.PowerModelHostSimple;
 import org.cloudsimplus.provisioners.ResourceProvisionerSimple;
 import org.cloudsimplus.resources.Pe;
@@ -39,47 +41,45 @@ public final class SLANoDVS {
     private final List<Vm> vmList = new ArrayList<>(LowPower.VMS);
     private CloudSimPlus simulation;
 
-    /**
-     * The file containing the Customer's SLA Contract in JSON format.
-     */
-    private static final String CUSTOMER_SLA_CONTRACT = "CustomerSLA.json";
-
     private final SlaContract contract;
     private final List<Cloudlet> cloudletList;
+    private final List<Cloudlet> failedTasks = new ArrayList<>();
 
     public static void main(String[] args) {
         new SLANoDVS();
     }
 
     private SLANoDVS() {
-        /*Enables just some level of log messages.
-          Make sure to import org.cloudsimplus.util.Log;*/
-        //Log.setLevel(ch.qos.logback.classic.Level.WARN);
-
         System.out.println("Starting " + getClass().getSimpleName());
         simulation = new CloudSimPlus();
 
-        this.contract = SlaContract.getInstance(CUSTOMER_SLA_CONTRACT);
+        this.contract = SlaContract.getInstance(LowPower.CUSTOMER_SLA_CONTRACT);
         cloudletList = new ArrayList<>(LowPower.CLOUDLETS);
         this.datacenterList = new ArrayList<>(LowPower.DATACENTERS);
 
         for (int i = 0; i < LowPower.DATACENTERS; i++)
             this.datacenterList.add(createDatacenter());
 
-        // DatacenterBrokerSimple is basically round robin
-        final var broker = new DatacenterBrokerSimple(simulation);
+        final var broker = new VMScheduler(simulation);
 
         createAndSubmitVms(broker);
         createAndSubmitCloudlets(broker);
 
         simulation.start();
 
-        new CloudletsTableBuilder(broker.getCloudletFinishedList()).build();
+        // Fail the tasks after the simulation is done
+        for (Cloudlet c : failedTasks)
+            c.setStatus(Status.FAILED);
+        new CloudletsTableBuilder(cloudletList).build();
 
         System.out.println(getClass().getSimpleName() + " finished!");
     }
 
+    /**
+     * Creates the tasks to be sent to system
+     */
     private void createAndSubmitCloudlets(final DatacenterBroker broker) {
+        double currentArrivalTime = 0;
         final UtilizationModel um = new UtilizationModelDynamic(UtilizationModel.Unit.ABSOLUTE, 50);
         for (int i = 1; i <= LowPower.CLOUDLETS; i++) {
             UtilizationModelDynamic cpuUtilizationModel = new UtilizationModelDynamic(
@@ -92,32 +92,47 @@ public final class SLANoDVS {
                     .setUtilizationModelCpu(cpuUtilizationModel)
                     .setUtilizationModelRam(um)
                     .setUtilizationModelBw(um);
+            c.setSubmissionDelay(currentArrivalTime);
+            c.addOnStartListener(this::taskFinishedCallback);
+            // Random arrival time
+            currentArrivalTime += (double) LowPower.rng.nextInt(5) / 10;
             cloudletList.add(c);
         }
 
         broker.submitCloudletList(cloudletList);
     }
 
+    /**
+     * Creates the virtual machines to run on each host
+     */
     private void createAndSubmitVms(final DatacenterBroker broker) {
         for (int i = 0; i < LowPower.VMS; i++) {
-            Vm vm = createVm();
+            final Vm vm = new VmSimple(vmList.size(), LowPower.VM_MIPS[LowPower.rng.nextInt(LowPower.VM_MIPS.length)],
+                    LowPower.VM_PES_NUM);
+            vm.setRam(LowPower.VM_RAM).setBw(LowPower.VM_BW).setSize(LowPower.VM_SIZE)
+                    .setCloudletScheduler(new CloudletSchedulerTimeShared())
+                    .enableUtilizationStats();
             vmList.add(vm);
         }
         broker.submitVmList(vmList);
     }
 
-    private Vm createVm() {
-        final Vm vm = new VmSimple(vmList.size(), LowPower.VM_MIPS[LowPower.rng.nextInt(LowPower.VM_MIPS.length)],
-                LowPower.VM_PES_NUM);
-        vm.setRam(LowPower.VM_RAM).setBw(LowPower.VM_BW).setSize(LowPower.VM_SIZE)
-                .setCloudletScheduler(new CloudletSchedulerTimeShared());
-        return vm;
-    }
-
     private Datacenter createDatacenter() {
         final var hostList = new ArrayList<Host>(LowPower.HOSTS);
         for (int i = 0; i < LowPower.HOSTS; i++) {
-            hostList.add(createHost(LowPower.HOST_NUMBER_OF_PES, LowPower.HOST_MIPS_BY_PE));
+            // Create the cpu cores
+            final var peList = new ArrayList<Pe>(LowPower.HOST_NUMBER_OF_PES);
+            for (int j = 0; j < LowPower.HOST_NUMBER_OF_PES; j++) {
+                peList.add(new PeSimple(LowPower.HOST_MIPS_BY_PE));
+            }
+            // Create the physical machine
+            final var host = new ScoredPM(LowPower.HOST_RAM, LowPower.HOST_BW, LowPower.HOST_STORAGE, peList, 1000);
+            host.setPowerModel(new PowerModelHostSimple(1000, 700));
+            host.setRamProvisioner(new ResourceProvisionerSimple());
+            host.setBwProvisioner(new ResourceProvisionerSimple());
+            host.setVmScheduler(new VmSchedulerTimeShared());
+            // Add it to list of machines
+            hostList.add(host);
         }
 
         final var allocationPolicy
@@ -131,22 +146,20 @@ public final class SLANoDVS {
         return dc;
     }
 
-    private Host createHost(final int pesNumber, final long mipsByPe) {
-        final var peList = createPeList(pesNumber, mipsByPe);
-        final var host = new ScoredPM(LowPower.HOST_RAM, LowPower.HOST_BW, LowPower.HOST_STORAGE, peList, 0);
-        host.setPowerModel(new PowerModelHostSimple(1000, 700));
-        host.setRamProvisioner(new ResourceProvisionerSimple());
-        host.setBwProvisioner(new ResourceProvisionerSimple());
-        host.setVmScheduler(new VmSchedulerTimeShared());
-        return host;
-    }
-
-    private List<Pe> createPeList(final int numberOfPEs, final long mips) {
-        final var peList = new ArrayList<Pe>(numberOfPEs);
-        for (int i = 0; i < numberOfPEs; i++) {
-            peList.add(new PeSimple(mips));
+    /**
+     * When each tasks finishes, we might fail it based on a random number
+     */
+    private void taskFinishedCallback(CloudletVmEventInfo task) {
+        final ScoredPM pm = (ScoredPM)task.getVm().getHost();
+        if (LowPower.rng.nextDouble() < LowPower.FAIL_PROBABILITY) {
+            System.out.println("FAILED task " + task.getCloudlet().getId());
+            failedTasks.add(task.getCloudlet());
+            // TODO: Reschedule the task
+            
+            pm.taskDone(false);
+        } else {
+            pm.taskDone(true);
         }
-        return peList;
     }
 
     private static final class ScoredPM extends HostSimple {
@@ -186,7 +199,6 @@ public final class SLANoDVS {
             if (getVmExecList().isEmpty())
                 return Vm.NULL;
 
-            
             // Get the VM which is running on a host that has the best score
             return getVmExecList().stream().max(Comparator.comparing(c -> ((ScoredPM)(((Vm)c).getHost())).getScore())).get();
         }

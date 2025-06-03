@@ -5,11 +5,13 @@ import org.cloudsimplus.brokers.DatacenterBrokerSimple;
 import org.cloudsimplus.builders.tables.CloudletsTableBuilder;
 import org.cloudsimplus.cloudlets.Cloudlet;
 import org.cloudsimplus.cloudlets.CloudletSimple;
+import org.cloudsimplus.cloudlets.Cloudlet.Status;
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
 import org.cloudsimplus.datacenters.DatacenterSimple;
 import org.cloudsimplus.hosts.Host;
 import org.cloudsimplus.hosts.HostSimple;
+import org.cloudsimplus.listeners.CloudletVmEventInfo;
 import org.cloudsimplus.power.models.PowerModelHostSimple;
 import org.cloudsimplus.provisioners.ResourceProvisionerSimple;
 import org.cloudsimplus.resources.Pe;
@@ -33,11 +35,9 @@ public final class RoundRobin {
     private final List<Vm> vmList = new ArrayList<>(LowPower.VMS);
     private CloudSimPlus simulation;
 
-    /**
-     * The file containing the Customer's SLA Contract in JSON format.
-     */
     private final SlaContract contract;
     private final List<Cloudlet> cloudletList;
+    private final List<Cloudlet> failedTasks = new ArrayList<>();
 
     public static void main(String[] args) {
         new RoundRobin();
@@ -62,7 +62,10 @@ public final class RoundRobin {
 
         simulation.start();
 
-        new CloudletsTableBuilder(broker.getCloudletFinishedList()).build();
+        // Fail the tasks after the simulation is done
+        for (Cloudlet c : failedTasks)
+            c.setStatus(Status.FAILED);
+        new CloudletsTableBuilder(cloudletList).build();
 
         System.out.println(getClass().getSimpleName() + " finished!");
     }
@@ -85,6 +88,7 @@ public final class RoundRobin {
                     .setUtilizationModelRam(um)
                     .setUtilizationModelBw(um);
             c.setSubmissionDelay(currentArrivalTime);
+            c.addOnStartListener(this::taskFinishedCallback);
             // Random arrival time
             currentArrivalTime += (double) LowPower.rng.nextInt(5) / 10;
             cloudletList.add(c);
@@ -127,5 +131,16 @@ public final class RoundRobin {
         }
 
         return new DatacenterSimple(simulation, hostList);
+    }
+
+    /**
+     * When each tasks finishes, we might fail it based on a random number
+     */
+    private void taskFinishedCallback(CloudletVmEventInfo task) {
+        if (LowPower.rng.nextDouble() < LowPower.FAIL_PROBABILITY) {
+            System.out.println("FAILED task " + task.getCloudlet().getId());
+            failedTasks.add(task.getCloudlet());
+            // We don't reschedule the task in round robin
+        }
     }
 }
