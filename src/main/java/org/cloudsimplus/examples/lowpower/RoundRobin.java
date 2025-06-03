@@ -137,7 +137,7 @@ public final class RoundRobin {
      * When each tasks finishes, we might fail it based on a random number
      */
     private void taskFinishedCallback(CloudletVmEventInfo task) {
-        if (LowPower.rng.nextDouble() < LowPower.FAIL_PROBABILITY) {
+        if (LowPower.FAILIURE_RNG.eventsHappened()) {
             System.out.println("FAILED task " + task.getCloudlet().getId());
             failedTasks.add(task.getCloudlet());
             // We don't reschedule the task in round robin

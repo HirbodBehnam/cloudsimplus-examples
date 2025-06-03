@@ -25,13 +25,20 @@ public final class LowPower {
 
     public static final double CLOUDLET_CPU_USAGE_PERCENT = 0.75;
 
-    public static final int    DATACENTERS = 2;
-    public static final int    HOSTS = 100;
-    public static final int    VMS = HOSTS * DATACENTERS;
-    public static final int    CLOUDLETS = 10;
-    public static final double FAIL_PROBABILITY = 0.01;
+    public static final int DATACENTERS = 2;
+    public static final int HOSTS = 100;
+    public static final int VMS = HOSTS * DATACENTERS;
+    public static final int CLOUDLETS = 10;
 
     public static final String CUSTOMER_SLA_CONTRACT = "CustomerSLA.json";
 
     public static final Random rng = new Random();
+    
+    public static final double MTTF = 10000;
+    public static final PoissonDistr FAILIURE_RNG = new PoissonDistr(1 / MTTF);
+
+    /**
+     * The cycle which we renew the priority of each task
+     */
+    public static final double T_p = 100;
 }

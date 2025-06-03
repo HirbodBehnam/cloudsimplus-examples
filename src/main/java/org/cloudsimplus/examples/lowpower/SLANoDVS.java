@@ -60,7 +60,7 @@ public final class SLANoDVS {
         for (int i = 0; i < LowPower.DATACENTERS; i++)
             this.datacenterList.add(createDatacenter());
 
-        final var broker = new VMScheduler(simulation);
+        final var broker = new TaskScheduler(simulation);
 
         createAndSubmitVms(broker);
         createAndSubmitCloudlets(broker);
@@ -85,8 +85,9 @@ public final class SLANoDVS {
             UtilizationModelDynamic cpuUtilizationModel = new UtilizationModelDynamic(
                     LowPower.CLOUDLET_CPU_USAGE_PERCENT);
 
-            final Cloudlet c = new CloudletSimple(
-                    i, LowPower.CLOUDLET_LENGHT, 1)
+            final int deadline = 5 + LowPower.rng.nextInt(5);
+            final Cloudlet c = new DeadlineTask(
+                    i, LowPower.CLOUDLET_LENGHT, 1, deadline)
                     .setFileSize(LowPower.CLOUDLET_FILESIZE)
                     .setOutputSize(LowPower.CLOUDLET_OUTPUTSIZE)
                     .setUtilizationModelCpu(cpuUtilizationModel)
@@ -126,7 +127,7 @@ public final class SLANoDVS {
                 peList.add(new PeSimple(LowPower.HOST_MIPS_BY_PE));
             }
             // Create the physical machine
-            final var host = new ScoredPM(LowPower.HOST_RAM, LowPower.HOST_BW, LowPower.HOST_STORAGE, peList, 1000);
+            final var host = new ScoredPM(LowPower.HOST_RAM, LowPower.HOST_BW, LowPower.HOST_STORAGE, peList, LowPower.MTTF);
             host.setPowerModel(new PowerModelHostSimple(1000, 700));
             host.setRamProvisioner(new ResourceProvisionerSimple());
             host.setBwProvisioner(new ResourceProvisionerSimple());
@@ -151,7 +152,7 @@ public final class SLANoDVS {
      */
     private void taskFinishedCallback(CloudletVmEventInfo task) {
         final ScoredPM pm = (ScoredPM)task.getVm().getHost();
-        if (LowPower.rng.nextDouble() < LowPower.FAIL_PROBABILITY) {
+        if (LowPower.FAILIURE_RNG.eventsHappened()) {
             System.out.println("FAILED task " + task.getCloudlet().getId());
             failedTasks.add(task.getCloudlet());
             // TODO: Reschedule the task
@@ -183,9 +184,9 @@ public final class SLANoDVS {
         }
     }
 
-    private static final class VMScheduler extends DatacenterBrokerSimple {
-        public VMScheduler(final CloudSimPlus simulation) {
-            super(simulation, "VMScheduler");
+    private static final class TaskScheduler extends DatacenterBrokerSimple {
+        public TaskScheduler(final CloudSimPlus simulation) {
+            super(simulation, "TaskScheduler");
         }
 
         @Override
@@ -201,6 +202,32 @@ public final class SLANoDVS {
 
             // Get the VM which is running on a host that has the best score
             return getVmExecList().stream().max(Comparator.comparing(c -> ((ScoredPM)(((Vm)c).getHost())).getScore())).get();
+        }
+    }
+
+    /**
+     * A task which has a deadline and its priority is tied to the deadline
+     */
+    private static final class DeadlineTask extends CloudletSimple {
+        private final double deadline;
+        
+        public DeadlineTask(final long id, final long length, final long pesNumber, final double deadline) {
+            super(id, length, pesNumber);
+            this.deadline = deadline;
+        }
+
+        /**
+         * Refereshes the priority based on the remaning time to do this task
+         * @param currentTime The current time of the simulation
+         */
+        public void refreshPriority(final double currentTime) {
+            final double remainingTime = deadline - currentTime;
+            if (remainingTime < LowPower.T_p)
+                setPriority(3);
+            else if (remainingTime < 2 * LowPower.T_p)
+                setPriority(2);
+            else
+                setPriority(1);
         }
     }
 }
