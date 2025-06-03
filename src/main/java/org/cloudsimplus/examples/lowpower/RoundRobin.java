@@ -44,12 +44,6 @@ public final class RoundRobin {
     }
 
     private RoundRobin() {
-        /*
-         * Enables just some level of log messages.
-         * Make sure to import org.cloudsimplus.util.Log;
-         */
-        // Log.setLevel(ch.qos.logback.classic.Level.WARN);
-
         System.out.println("Starting " + getClass().getSimpleName());
         simulation = new CloudSimPlus();
 
@@ -73,7 +67,11 @@ public final class RoundRobin {
         System.out.println(getClass().getSimpleName() + " finished!");
     }
 
+    /**
+     * Creates the tasks to be sent to system
+     */
     private void createAndSubmitCloudlets(final DatacenterBroker broker) {
+        double currentArrivalTime = 0;
         final UtilizationModel um = new UtilizationModelDynamic(UtilizationModel.Unit.ABSOLUTE, 50);
         for (int i = 1; i <= LowPower.CLOUDLETS; i++) {
             UtilizationModelDynamic cpuUtilizationModel = new UtilizationModelDynamic(
@@ -86,53 +84,48 @@ public final class RoundRobin {
                     .setUtilizationModelCpu(cpuUtilizationModel)
                     .setUtilizationModelRam(um)
                     .setUtilizationModelBw(um);
+            c.setSubmissionDelay(currentArrivalTime);
+            // Random arrival time
+            currentArrivalTime += (double) LowPower.rng.nextInt(5) / 10;
             cloudletList.add(c);
         }
 
         broker.submitCloudletList(cloudletList);
     }
 
+    /**
+     * Creates the virtual machines to run on each host
+     */
     private void createAndSubmitVms(final DatacenterBroker broker) {
         for (int i = 0; i < LowPower.VMS; i++) {
-            Vm vm = createVm();
+            final Vm vm = new VmSimple(vmList.size(), LowPower.VM_MIPS[LowPower.rng.nextInt(LowPower.VM_MIPS.length)],
+                    LowPower.VM_PES_NUM);
+            vm.setRam(LowPower.VM_RAM).setBw(LowPower.VM_BW).setSize(LowPower.VM_SIZE)
+                    .setCloudletScheduler(new CloudletSchedulerTimeShared())
+                    .enableUtilizationStats();
             vmList.add(vm);
         }
         broker.submitVmList(vmList);
     }
 
-    private Vm createVm() {
-        final Vm vm = new VmSimple(vmList.size(), LowPower.VM_MIPS[LowPower.rng.nextInt(LowPower.VM_MIPS.length)],
-                LowPower.VM_PES_NUM);
-        vm.setRam(LowPower.VM_RAM).setBw(LowPower.VM_BW).setSize(LowPower.VM_SIZE)
-                .setCloudletScheduler(new CloudletSchedulerTimeShared())
-                .enableUtilizationStats();
-        return vm;
-    }
-
     private Datacenter createDatacenter() {
         final var hostList = new ArrayList<Host>(LowPower.HOSTS);
         for (int i = 0; i < LowPower.HOSTS; i++) {
-            hostList.add(createHost(LowPower.HOST_NUMBER_OF_PES, LowPower.HOST_MIPS_BY_PE));
+            // Create the cpu cores
+            final var peList = new ArrayList<Pe>(LowPower.HOST_NUMBER_OF_PES);
+            for (int j = 0; j < LowPower.HOST_NUMBER_OF_PES; j++) {
+                peList.add(new PeSimple(LowPower.HOST_MIPS_BY_PE));
+            }
+            // Create the physical machine
+            final var host = new HostSimple(LowPower.HOST_RAM, LowPower.HOST_BW, LowPower.HOST_STORAGE, peList);
+            host.setPowerModel(new PowerModelHostSimple(1000, 700));
+            host.setRamProvisioner(new ResourceProvisionerSimple());
+            host.setBwProvisioner(new ResourceProvisionerSimple());
+            host.setVmScheduler(new VmSchedulerTimeShared());
+            // Add it to list of machines
+            hostList.add(host);
         }
 
         return new DatacenterSimple(simulation, hostList);
-    }
-
-    private Host createHost(final int pesNumber, final long mipsByPe) {
-        final var peList = createPeList(pesNumber, mipsByPe);
-        final var host = new HostSimple(LowPower.HOST_RAM, LowPower.HOST_BW, LowPower.HOST_STORAGE, peList);
-        host.setPowerModel(new PowerModelHostSimple(1000, 700));
-        host.setRamProvisioner(new ResourceProvisionerSimple());
-        host.setBwProvisioner(new ResourceProvisionerSimple());
-        host.setVmScheduler(new VmSchedulerTimeShared());
-        return host;
-    }
-
-    private List<Pe> createPeList(final int numberOfPEs, final long mips) {
-        final var peList = new ArrayList<Pe>(numberOfPEs);
-        for (int i = 0; i < numberOfPEs; i++) {
-            peList.add(new PeSimple(mips));
-        }
-        return peList;
     }
 }

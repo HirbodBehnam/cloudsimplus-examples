@@ -17,15 +17,15 @@ public final class LowPower {
     public static final long  VM_BW = 100000;
     public static final int   VM_PES_NUM = HOST_NUMBER_OF_PES; //number of cpus
 
-    public static final long CLOUDLET_LENGHT = 2;
-    public static final long CLOUDLET_FILESIZE = 300;
-    public static final long CLOUDLET_OUTPUTSIZE = 300;
+    public static final long CLOUDLET_LENGHT = 1000;
+    public static final long CLOUDLET_FILESIZE = 300 * 1024;
+    public static final long CLOUDLET_OUTPUTSIZE = 300 * 1024;
 
     public static final double CLOUDLET_CPU_USAGE_PERCENT = 0.75;
 
     public static final int DATACENTERS = 2;
     public static final int HOSTS = 100;
-    public static final int VMS = 220;
+    public static final int VMS = HOSTS * DATACENTERS;
     public static final int CLOUDLETS = 10000;
 
     public static final String CUSTOMER_SLA_CONTRACT = "CustomerSLA.json";
