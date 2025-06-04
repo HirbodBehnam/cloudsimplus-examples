@@ -38,6 +38,7 @@ public final class SLANoDVS {
     private CloudSimPlus simulation;
 
     private final SlaContract contract;
+    private final List<Host> allHostList;
     private final List<Cloudlet> cloudletList;
     private final List<Cloudlet> failedTasks = new ArrayList<>();
 
@@ -50,7 +51,8 @@ public final class SLANoDVS {
         simulation = new CloudSimPlus();
 
         this.contract = SlaContract.getInstance(LowPower.CUSTOMER_SLA_CONTRACT);
-        cloudletList = new ArrayList<>(LowPower.CLOUDLETS);
+        this.cloudletList = new ArrayList<>(LowPower.CLOUDLETS);
+        this.allHostList = new ArrayList<>(LowPower.HOSTS);
         this.datacenterList = new ArrayList<>(LowPower.DATACENTERS);
 
         for (int i = 0; i < LowPower.DATACENTERS; i++)
@@ -69,6 +71,7 @@ public final class SLANoDVS {
             c.setStatus(Status.FAILED);
         new CloudletsTableBuilder(cloudletList).build();
 
+        LowPower.printHostsCpuUtilizationAndPowerConsumption(allHostList);
         System.out.println(getClass().getSimpleName() + " finished!");
     }
 
@@ -91,7 +94,7 @@ public final class SLANoDVS {
                     .setUtilizationModelRam(um)
                     .setUtilizationModelBw(um);
             c.setSubmissionDelay(currentArrivalTime);
-            c.addOnStartListener(this::taskFinishedCallback);
+            c.addOnFinishListener(this::taskFinishedCallback);
             // Random arrival time
             currentArrivalTime += (double) LowPower.rng.nextInt(5) / 10;
             cloudletList.add(c);
@@ -106,10 +109,10 @@ public final class SLANoDVS {
     private void createAndSubmitVms(final DatacenterBroker broker) {
         for (int i = 0; i < LowPower.VMS; i++) {
             final Vm vm = new VmSimple(vmList.size(), LowPower.VM_MIPS[LowPower.rng.nextInt(LowPower.VM_MIPS.length)],
-                    LowPower.VM_PES_NUM);
-            vm.setRam(LowPower.VM_RAM).setBw(LowPower.VM_BW).setSize(LowPower.VM_SIZE)
-                    .setCloudletScheduler(new CloudletSchedulerTimeShared())
-                    .enableUtilizationStats();
+                    LowPower.VM_PES_NUM)
+                    .setRam(LowPower.VM_RAM).setBw(LowPower.VM_BW).setSize(LowPower.VM_SIZE)
+                    .setCloudletScheduler(new CloudletSchedulerTimeShared());
+            vm.enableUtilizationStats();
             vmList.add(vm);
         }
         broker.submitVmList(vmList);
@@ -129,8 +132,10 @@ public final class SLANoDVS {
             host.setRamProvisioner(new ResourceProvisionerSimple());
             host.setBwProvisioner(new ResourceProvisionerSimple());
             host.setVmScheduler(new VmSchedulerTimeShared());
+            host.enableUtilizationStats();
             // Add it to list of machines
             hostList.add(host);
+            allHostList.add(host);
         }
 
         return new DatacenterSimple(simulation, hostList);
@@ -142,7 +147,7 @@ public final class SLANoDVS {
     private void taskFinishedCallback(CloudletVmEventInfo task) {
         final ScoredPM physicalMachine = (ScoredPM) task.getVm().getHost();
 
-        if (LowPower.FAILIURE_RNG.eventsHappened()) {
+        if (LowPower.FAILURE_RNG.eventsHappened()) {
             System.out.println("FAILED task " + task.getCloudlet().getId());
             failedTasks.add(task.getCloudlet());
             // We don't reschedule the task in round robin
