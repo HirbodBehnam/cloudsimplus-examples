@@ -5,7 +5,6 @@ import org.cloudsimplus.brokers.DatacenterBrokerSimple;
 import org.cloudsimplus.builders.tables.CloudletsTableBuilder;
 import org.cloudsimplus.cloudlets.Cloudlet;
 import org.cloudsimplus.cloudlets.Cloudlet.Status;
-import org.cloudsimplus.cloudlets.CloudletSimple;
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
 import org.cloudsimplus.datacenters.DatacenterSimple;
@@ -19,9 +18,6 @@ import org.cloudsimplus.resources.Pe;
 import org.cloudsimplus.resources.PeSimple;
 import org.cloudsimplus.schedulers.cloudlet.CloudletSchedulerTimeShared;
 import org.cloudsimplus.schedulers.vm.VmSchedulerTimeShared;
-import org.cloudsimplus.slametrics.SlaContract;
-import org.cloudsimplus.utilizationmodels.UtilizationModel;
-import org.cloudsimplus.utilizationmodels.UtilizationModelDynamic;
 import org.cloudsimplus.vms.Vm;
 import org.cloudsimplus.vms.VmSimple;
 
@@ -59,8 +55,8 @@ public final class SLANoDVS {
 
         final var broker = new TaskScheduler(simulation);
 
-        createAndSubmitVms(broker);
-        createAndSubmitCloudlets(broker);
+        LowPower.createAndSubmitVms(broker, vmList);
+        LowPower.createAndSubmitCloudlets(broker, cloudletList, this::taskFinishedCallback);
 
         simulation.addOnClockTickListener(this::simulationTick);
         simulation.start();
@@ -72,49 +68,6 @@ public final class SLANoDVS {
 
         LowPower.printHostsCpuUtilizationAndPowerConsumption(allHostList);
         System.out.println(getClass().getSimpleName() + " finished!");
-    }
-
-    /**
-     * Creates the tasks to be sent to system
-     */
-    private void createAndSubmitCloudlets(final DatacenterBroker broker) {
-        double currentArrivalTime = 0;
-        final UtilizationModel um = new UtilizationModelDynamic(UtilizationModel.Unit.ABSOLUTE, 50);
-        for (int i = 1; i <= LowPower.CLOUDLETS; i++) {
-            UtilizationModelDynamic cpuUtilizationModel = new UtilizationModelDynamic(
-                    LowPower.CLOUDLET_CPU_USAGE_PERCENT);
-
-            final int deadline = 5 + LowPower.rng.nextInt(5);
-            final Cloudlet c = new DeadlineTask(
-                    i, LowPower.CLOUDLET_LENGHT, 1, deadline)
-                    .setFileSize(LowPower.CLOUDLET_FILESIZE)
-                    .setOutputSize(LowPower.CLOUDLET_OUTPUTSIZE)
-                    .setUtilizationModelCpu(cpuUtilizationModel)
-                    .setUtilizationModelRam(um)
-                    .setUtilizationModelBw(um);
-            c.setSubmissionDelay(currentArrivalTime);
-            c.addOnFinishListener(this::taskFinishedCallback);
-            // Random arrival time
-            currentArrivalTime += (double) LowPower.rng.nextInt(5) / 10;
-            cloudletList.add(c);
-        }
-
-        broker.submitCloudletList(cloudletList);
-    }
-
-    /**
-     * Creates the virtual machines to run on each host
-     */
-    private void createAndSubmitVms(final DatacenterBroker broker) {
-        for (int i = 0; i < LowPower.VMS; i++) {
-            final Vm vm = new VmSimple(vmList.size(), LowPower.VM_MIPS[LowPower.rng.nextInt(LowPower.VM_MIPS.length)],
-                    LowPower.VM_PES_NUM)
-                    .setRam(LowPower.VM_RAM).setBw(LowPower.VM_BW).setSize(LowPower.VM_SIZE)
-                    .setCloudletScheduler(new CloudletSchedulerTimeShared());
-            vm.enableUtilizationStats();
-            vmList.add(vm);
-        }
-        broker.submitVmList(vmList);
     }
 
     private Datacenter createDatacenter() {
@@ -166,7 +119,7 @@ public final class SLANoDVS {
         if (((long) info.getTime()) % LowPower.T_p == 0) {
             for (Cloudlet c : cloudletList) {
                 if (c.getStatus() != Status.SUCCESS) {
-                    ((DeadlineTask) c).refreshPriority(info.getTime());
+                    ((LowPower.CloudletDedline) c).refreshPriority(info.getTime());
                 }
             }
         }
@@ -256,34 +209,6 @@ public final class SLANoDVS {
                     return result;
                 }
             return null;
-        }
-    }
-
-    /**
-     * A task which has a deadline and its priority is tied to the deadline
-     */
-    private static final class DeadlineTask extends CloudletSimple {
-        private final double deadline;
-
-        public DeadlineTask(final long id, final long length, final long pesNumber, final double deadline) {
-            super(id, length, pesNumber);
-            this.deadline = deadline;
-            refreshPriority(0);
-        }
-
-        /**
-         * Refereshes the priority based on the remaning time to do this task
-         * 
-         * @param currentTime The current time of the simulation
-         */
-        public void refreshPriority(final double currentTime) {
-            final double remainingTime = deadline - currentTime;
-            if (remainingTime < LowPower.T_p)
-                setPriority(3); // High
-            else if (remainingTime < 2 * LowPower.T_p)
-                setPriority(2); // Medium
-            else
-                setPriority(1); // Low
         }
     }
 }

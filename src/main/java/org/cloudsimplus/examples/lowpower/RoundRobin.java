@@ -4,7 +4,6 @@ import org.cloudsimplus.brokers.DatacenterBroker;
 import org.cloudsimplus.brokers.DatacenterBrokerSimple;
 import org.cloudsimplus.builders.tables.CloudletsTableBuilder;
 import org.cloudsimplus.cloudlets.Cloudlet;
-import org.cloudsimplus.cloudlets.CloudletSimple;
 import org.cloudsimplus.cloudlets.Cloudlet.Status;
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
@@ -18,8 +17,6 @@ import org.cloudsimplus.resources.Pe;
 import org.cloudsimplus.resources.PeSimple;
 import org.cloudsimplus.schedulers.cloudlet.CloudletSchedulerTimeShared;
 import org.cloudsimplus.schedulers.vm.VmSchedulerTimeShared;
-import org.cloudsimplus.utilizationmodels.UtilizationModel;
-import org.cloudsimplus.utilizationmodels.UtilizationModelDynamic;
 import org.cloudsimplus.vms.Vm;
 import org.cloudsimplus.vms.VmSimple;
 
@@ -57,8 +54,8 @@ public final class RoundRobin {
         // DatacenterBrokerSimple is basically round robin
         final var broker = new DatacenterBrokerSimple(simulation);
 
-        createAndSubmitVms(broker);
-        createAndSubmitCloudlets(broker);
+        LowPower.createAndSubmitVms(broker, vmList);
+        LowPower.createAndSubmitCloudlets(broker, cloudletList, this::taskFinishedCallback);
 
         simulation.start();
 
@@ -69,48 +66,6 @@ public final class RoundRobin {
 
         LowPower.printHostsCpuUtilizationAndPowerConsumption(allHostList);
         System.out.println(getClass().getSimpleName() + " finished!");
-    }
-
-    /**
-     * Creates the tasks to be sent to system
-     */
-    private void createAndSubmitCloudlets(final DatacenterBroker broker) {
-        double currentArrivalTime = 0;
-        final UtilizationModel um = new UtilizationModelDynamic(UtilizationModel.Unit.ABSOLUTE, 50);
-        for (int i = 1; i <= LowPower.CLOUDLETS; i++) {
-            UtilizationModelDynamic cpuUtilizationModel = new UtilizationModelDynamic(
-                    LowPower.CLOUDLET_CPU_USAGE_PERCENT);
-
-            final Cloudlet c = new CloudletSimple(
-                    i, LowPower.CLOUDLET_LENGHT, 1)
-                    .setFileSize(LowPower.CLOUDLET_FILESIZE)
-                    .setOutputSize(LowPower.CLOUDLET_OUTPUTSIZE)
-                    .setUtilizationModelCpu(cpuUtilizationModel)
-                    .setUtilizationModelRam(um)
-                    .setUtilizationModelBw(um);
-            c.setSubmissionDelay(currentArrivalTime);
-            c.addOnFinishListener(this::taskFinishedCallback);
-            // Random arrival time
-            currentArrivalTime += (double) LowPower.rng.nextInt(5) / 10;
-            cloudletList.add(c);
-        }
-
-        broker.submitCloudletList(cloudletList);
-    }
-
-    /**
-     * Creates the virtual machines to run on each host
-     */
-    private void createAndSubmitVms(final DatacenterBroker broker) {
-        for (int i = 0; i < LowPower.VMS; i++) {
-            final Vm vm = new VmSimple(vmList.size(), LowPower.VM_MIPS[LowPower.rng.nextInt(LowPower.VM_MIPS.length)],
-                    LowPower.VM_PES_NUM)
-                    .setRam(LowPower.VM_RAM).setBw(LowPower.VM_BW).setSize(LowPower.VM_SIZE)
-                    .setCloudletScheduler(new CloudletSchedulerTimeShared());
-            vm.enableUtilizationStats();
-            vmList.add(vm);
-        }
-        broker.submitVmList(vmList);
     }
 
     private Datacenter createDatacenter() {

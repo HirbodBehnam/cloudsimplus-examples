@@ -3,9 +3,19 @@ package org.cloudsimplus.examples.lowpower;
 import java.util.List;
 import java.util.Random;
 
+import org.cloudsimplus.brokers.DatacenterBroker;
+import org.cloudsimplus.cloudlets.Cloudlet;
+import org.cloudsimplus.cloudlets.CloudletSimple;
 import org.cloudsimplus.distributions.PoissonDistr;
 import org.cloudsimplus.hosts.Host;
+import org.cloudsimplus.listeners.CloudletVmEventInfo;
+import org.cloudsimplus.listeners.EventListener;
+import org.cloudsimplus.schedulers.cloudlet.CloudletSchedulerTimeShared;
+import org.cloudsimplus.utilizationmodels.UtilizationModel;
+import org.cloudsimplus.utilizationmodels.UtilizationModelDynamic;
 import org.cloudsimplus.vms.HostResourceStats;
+import org.cloudsimplus.vms.Vm;
+import org.cloudsimplus.vms.VmSimple;
 
 public final class LowPower {
     public static final int HOST_MIPS_BY_PE = 3000;
@@ -41,6 +51,11 @@ public final class LowPower {
      */
     public static final double T_p = 100;
 
+    /**
+     * For a set of hosts, writes their CPU utlization
+     * 
+     * @param hostList The list to print their CPU utilization
+     */
     public static void printHostsCpuUtilizationAndPowerConsumption(final List<Host> hostList) {
         System.out.println("Host Power Consumptions:");
         for (final Host host : hostList) {
@@ -50,9 +65,80 @@ public final class LowPower {
             final double utilizationPercentMean = cpuStats.getMean();
             final double watts = host.getPowerModel().getPower(utilizationPercentMean);
             System.out.printf(
-                    "Host %2d CPU Usage mean: %6.1f%% | Power Consumption mean: %8.0f W%n",
-                    host.getId(), utilizationPercentMean * 100, watts);
+                    "Host %2d in datacenter %d CPU Usage mean: %6.1f%% | Power Consumption mean: %8.0f W%n",
+                    host.getId(), host.getDatacenter().getId(), utilizationPercentMean * 100, watts);
         }
         System.out.println();
+    }
+
+    /**
+     * Creates the virtual machines to run on each host
+     */
+    static void createAndSubmitVms(DatacenterBroker broker, List<Vm> vmList) {
+        for (int i = 0; i < LowPower.VMS; i++) {
+            final Vm vm = new VmSimple(vmList.size(), LowPower.VM_MIPS[LowPower.rng.nextInt(LowPower.VM_MIPS.length)],
+                    LowPower.VM_PES_NUM)
+                    .setRam(LowPower.VM_RAM).setBw(LowPower.VM_BW).setSize(LowPower.VM_SIZE)
+                    .setCloudletScheduler(new CloudletSchedulerTimeShared());
+            vm.enableUtilizationStats();
+            vmList.add(vm);
+        }
+        broker.submitVmList(vmList);
+    }
+
+    /**
+     * Creates the tasks to be sent to system
+     */
+    static void createAndSubmitCloudlets(DatacenterBroker broker, List<Cloudlet> cloudletList, EventListener<CloudletVmEventInfo> onFinishListener) {
+        double currentArrivalTime = 0;
+        final UtilizationModel um = new UtilizationModelDynamic(UtilizationModel.Unit.ABSOLUTE, 50);
+        for (int i = 1; i <= LowPower.CLOUDLETS; i++) {
+            UtilizationModelDynamic cpuUtilizationModel = new UtilizationModelDynamic(
+                    LowPower.CLOUDLET_CPU_USAGE_PERCENT);
+
+            final int deadline = 5 + LowPower.rng.nextInt(5);
+            final Cloudlet c = new LowPower.CloudletDedline(
+                    i, LowPower.CLOUDLET_LENGHT, 1, deadline)
+                    .setFileSize(LowPower.CLOUDLET_FILESIZE)
+                    .setOutputSize(LowPower.CLOUDLET_OUTPUTSIZE)
+                    .setUtilizationModelCpu(cpuUtilizationModel)
+                    .setUtilizationModelRam(um)
+                    .setUtilizationModelBw(um);
+            c.setSubmissionDelay(currentArrivalTime);
+            c.addOnFinishListener(onFinishListener);
+            // Random arrival time
+            currentArrivalTime += (double) LowPower.rng.nextInt(5) / 10;
+            cloudletList.add(c);
+        }
+
+        broker.submitCloudletList(cloudletList);
+    }
+
+    /**
+     * A task which has a deadline and its priority is tied to the deadline
+     */
+    static final class CloudletDedline extends CloudletSimple {
+        private final double deadline;
+
+        public CloudletDedline(final long id, final long length, final long pesNumber, final double deadline) {
+            super(id, length, pesNumber);
+            this.deadline = deadline;
+            refreshPriority(0);
+        }
+
+        /**
+         * Refereshes the priority based on the remaning time to do this task
+         * 
+         * @param currentTime The current time of the simulation
+         */
+        public void refreshPriority(final double currentTime) {
+            final double remainingTime = deadline - currentTime;
+            if (remainingTime < LowPower.T_p)
+                setPriority(3); // High
+            else if (remainingTime < 2 * LowPower.T_p)
+                setPriority(2); // Medium
+            else
+                setPriority(1); // Low
+        }
     }
 }
