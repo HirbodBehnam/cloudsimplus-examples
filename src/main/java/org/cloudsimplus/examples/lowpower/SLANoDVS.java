@@ -34,10 +34,9 @@ import java.util.List;
  */
 public final class SLANoDVS {
     private final List<Datacenter> datacenterList;
-    private final List<Vm> vmList = new ArrayList<>(LowPower.VMS);
+    private final List<Vm> vmList;
     private CloudSimPlus simulation;
 
-    private final SlaContract contract;
     private final List<Host> allHostList;
     private final List<Cloudlet> cloudletList;
     private final List<Cloudlet> failedTasks = new ArrayList<>();
@@ -50,10 +49,10 @@ public final class SLANoDVS {
         System.out.println("Starting " + getClass().getSimpleName());
         simulation = new CloudSimPlus();
 
-        this.contract = SlaContract.getInstance(LowPower.CUSTOMER_SLA_CONTRACT);
         this.cloudletList = new ArrayList<>(LowPower.CLOUDLETS);
         this.allHostList = new ArrayList<>(LowPower.HOSTS);
         this.datacenterList = new ArrayList<>(LowPower.DATACENTERS);
+        this.vmList = new ArrayList<>(LowPower.VMS);
 
         for (int i = 0; i < LowPower.DATACENTERS; i++)
             this.datacenterList.add(createDatacenter());
@@ -127,7 +126,8 @@ public final class SLANoDVS {
                 peList.add(new PeSimple(LowPower.HOST_MIPS_BY_PE));
             }
             // Create the physical machine
-            final var host = new ScoredPM(LowPower.HOST_RAM, LowPower.HOST_BW, LowPower.HOST_STORAGE, peList, LowPower.MTTF);
+            final var host = new ScoredPM(LowPower.HOST_RAM, LowPower.HOST_BW, LowPower.HOST_STORAGE, peList,
+                    LowPower.MTTF);
             host.setPowerModel(new PowerModelHostSimple(1000, 700));
             host.setRamProvisioner(new ResourceProvisionerSimple());
             host.setBwProvisioner(new ResourceProvisionerSimple());
@@ -191,6 +191,7 @@ public final class SLANoDVS {
 
         /**
          * When a task is finished this method shall be called
+         * 
          * @param successful True if task was sucessful otherwise false
          */
         public void taskDone(boolean successful) {
@@ -205,13 +206,24 @@ public final class SLANoDVS {
      * The scheduler proposed in this paper
      */
     private static final class TaskScheduler extends DatacenterBrokerSimple {
+        private int nextDatacenterIndex = 0;
+
         public TaskScheduler(final CloudSimPlus simulation) {
             super(simulation, "TaskScheduler");
         }
 
         @Override
+        protected Datacenter defaultDatacenterMapper(final Datacenter lastDatacenter, final Vm vm) {
+            final List<Datacenter> datacenters = getDatacenterList();
+            final Datacenter result = datacenters.get(nextDatacenterIndex);
+            nextDatacenterIndex = (nextDatacenterIndex + 1) % datacenters.size();
+            System.out.println("Mapping VM " + vm.getId() + " to datacenter " + result.getId());
+            return result;
+        }
+
+        @Override
         protected Vm defaultVmMapper(Cloudlet task) {
-            // If this task is assigned to a VM
+            // If this task is assigned to a VM, just return that
             if (task.isBoundToVm()) {
                 return task.getVm();
             }
@@ -220,9 +232,30 @@ public final class SLANoDVS {
             if (getVmExecList().isEmpty())
                 return Vm.NULL;
 
-            // Get the VM which is running on a host that has the best score
-            return getVmExecList().stream().max(Comparator.comparing(c -> ((ScoredPM) (((Vm) c).getHost())).getScore()))
-                    .get();
+            // Sort all virtual machines by their score
+            final List<Vm> sortedVms = getVmExecList().stream()
+                    .sorted(Comparator.comparing(c -> ((ScoredPM) (((Vm) c).getHost())).getScore())).toList();
+
+            // Based on the priority, find a suitable VM
+            int searchIndex;
+            switch (task.getPriority()) {
+                case 1: // Low
+                    searchIndex = sortedVms.size() * 7 / 10;
+                    break;
+                case 2:
+                    searchIndex = sortedVms.size() * 4 / 10;
+                    break;
+                default:
+                    searchIndex = 0;
+                    break;
+            }
+            for (; searchIndex < sortedVms.size(); searchIndex++)
+                if (sortedVms.get(searchIndex).isIdle()) { // TODO: Change this
+                    final Vm result = sortedVms.get(searchIndex);
+                    System.out.println("Mapping task " + task.getId() + " to VM " + result.getId());
+                    return result;
+                }
+            return null;
         }
     }
 
@@ -235,6 +268,7 @@ public final class SLANoDVS {
         public DeadlineTask(final long id, final long length, final long pesNumber, final double deadline) {
             super(id, length, pesNumber);
             this.deadline = deadline;
+            refreshPriority(0);
         }
 
         /**
@@ -245,11 +279,11 @@ public final class SLANoDVS {
         public void refreshPriority(final double currentTime) {
             final double remainingTime = deadline - currentTime;
             if (remainingTime < LowPower.T_p)
-                setPriority(3);
+                setPriority(3); // High
             else if (remainingTime < 2 * LowPower.T_p)
-                setPriority(2);
+                setPriority(2); // Medium
             else
-                setPriority(1);
+                setPriority(1); // Low
         }
     }
 }

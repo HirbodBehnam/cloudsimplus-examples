@@ -18,7 +18,6 @@ import org.cloudsimplus.resources.Pe;
 import org.cloudsimplus.resources.PeSimple;
 import org.cloudsimplus.schedulers.cloudlet.CloudletSchedulerTimeShared;
 import org.cloudsimplus.schedulers.vm.VmSchedulerTimeShared;
-import org.cloudsimplus.slametrics.SlaContract;
 import org.cloudsimplus.utilizationmodels.UtilizationModel;
 import org.cloudsimplus.utilizationmodels.UtilizationModelDynamic;
 import org.cloudsimplus.vms.Vm;
@@ -32,10 +31,9 @@ import java.util.List;
  */
 public final class RoundRobin {
     private final List<Datacenter> datacenterList;
-    private final List<Vm> vmList = new ArrayList<>(LowPower.VMS);
+    private final List<Vm> vmList;
     private CloudSimPlus simulation;
 
-    private final SlaContract contract;
     private final List<Host> allHostList;
     private final List<Cloudlet> cloudletList;
     private final List<Cloudlet> failedTasks = new ArrayList<>();
@@ -48,10 +46,10 @@ public final class RoundRobin {
         System.out.println("Starting " + getClass().getSimpleName());
         simulation = new CloudSimPlus();
 
-        this.contract = SlaContract.getInstance(LowPower.CUSTOMER_SLA_CONTRACT);
         this.cloudletList = new ArrayList<>(LowPower.CLOUDLETS);
         this.allHostList = new ArrayList<>(LowPower.HOSTS);
         this.datacenterList = new ArrayList<>(LowPower.DATACENTERS);
+        this.vmList = new ArrayList<>(LowPower.VMS);
 
         for (int i = 0; i < LowPower.DATACENTERS; i++)
             this.datacenterList.add(createDatacenter());
