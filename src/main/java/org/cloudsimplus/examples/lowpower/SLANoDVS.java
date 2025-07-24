@@ -1,25 +1,21 @@
 package org.cloudsimplus.examples.lowpower;
 
-import org.cloudsimplus.brokers.DatacenterBroker;
-import org.cloudsimplus.brokers.DatacenterBrokerSimple;
 import org.cloudsimplus.builders.tables.CloudletsTableBuilder;
 import org.cloudsimplus.cloudlets.Cloudlet;
 import org.cloudsimplus.cloudlets.Cloudlet.Status;
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
 import org.cloudsimplus.datacenters.DatacenterSimple;
+import org.cloudsimplus.examples.lowpower.LowPower.RoundRobinDatacenterAllocator;
 import org.cloudsimplus.hosts.Host;
 import org.cloudsimplus.hosts.HostSimple;
 import org.cloudsimplus.listeners.CloudletVmEventInfo;
-import org.cloudsimplus.listeners.EventInfo;
 import org.cloudsimplus.power.models.PowerModelHostSimple;
 import org.cloudsimplus.provisioners.ResourceProvisionerSimple;
 import org.cloudsimplus.resources.Pe;
 import org.cloudsimplus.resources.PeSimple;
-import org.cloudsimplus.schedulers.cloudlet.CloudletSchedulerTimeShared;
 import org.cloudsimplus.schedulers.vm.VmSchedulerTimeShared;
 import org.cloudsimplus.vms.Vm;
-import org.cloudsimplus.vms.VmSimple;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -32,10 +28,12 @@ public final class SLANoDVS {
     private final List<Datacenter> datacenterList;
     private final List<Vm> vmList;
     private CloudSimPlus simulation;
+    private long currentTime = 0;
 
     private final List<Host> allHostList;
     private final List<Cloudlet> cloudletList;
     private final List<Cloudlet> failedTasks = new ArrayList<>();
+    private final TaskScheduler broker;
 
     public static void main(String[] args) {
         new SLANoDVS();
@@ -53,17 +51,20 @@ public final class SLANoDVS {
         for (int i = 0; i < LowPower.DATACENTERS; i++)
             this.datacenterList.add(createDatacenter());
 
-        final var broker = new TaskScheduler(simulation);
+        broker = new TaskScheduler(simulation);
 
         LowPower.createAndSubmitVms(broker, vmList);
-        LowPower.createAndSubmitCloudlets(broker, cloudletList, this::taskFinishedCallback);
+        LowPower.createCloudlets(cloudletList, this::taskFinishedCallback);
+        // We must at least submit one cloudlet apparently
+        broker.submitCloudlet(cloudletList.get(0));
 
-        simulation.addOnClockTickListener(this::simulationTick);
-        simulation.start();
+        simulation.startSync();
+        while (simulation.isRunning()) {
+            simulationTick(currentTime);
+            simulation.runFor(LowPower.SIMULATION_INTERVAL);
+            currentTime++;
+        }
 
-        // Fail the tasks after the simulation is done
-        for (Cloudlet c : failedTasks)
-            c.setStatus(Status.FAILED);
         new CloudletsTableBuilder(cloudletList).build();
 
         LowPower.printHostsCpuUtilizationAndPowerConsumption(allHostList);
@@ -98,14 +99,18 @@ public final class SLANoDVS {
      * When each tasks finishes, we might fail it based on a random number
      */
     private void taskFinishedCallback(CloudletVmEventInfo task) {
-        final ScoredPM physicalMachine = (ScoredPM) task.getVm().getHost();
+        final LowPower.VmWithTaskCounter virtualMachine = (LowPower.VmWithTaskCounter) task.getVm();
+        final ScoredPM physicalMachine = (ScoredPM) virtualMachine.getHost();
+
+        System.out.println("Task " + task.getCloudlet().getId() + " done");
+        virtualMachine.finishTask();
 
         if (LowPower.FAILURE_RNG.eventsHappened()) {
             System.out.println("FAILED task " + task.getCloudlet().getId());
             failedTasks.add(task.getCloudlet());
-            // We don't reschedule the task in round robin
-
             physicalMachine.taskDone(false);
+
+            // TODO: Reschedule the task
         } else {
             physicalMachine.taskDone(true);
         }
@@ -114,13 +119,20 @@ public final class SLANoDVS {
     /**
      * This is called on every tick of the simulation
      * We will update the priority of each task in some ticks.
+     * It will also submit the tasks which arrive.
      */
-    private void simulationTick(EventInfo info) {
-        if (((long) info.getTime()) % LowPower.T_p == 0) {
+    private void simulationTick(long currentTime) {
+        if (currentTime % LowPower.T_p == 0) {
             for (Cloudlet c : cloudletList) {
                 if (c.getStatus() != Status.SUCCESS) {
-                    ((LowPower.CloudletDedline) c).refreshPriority(info.getTime());
+                    ((LowPower.CloudletDedline) c).refreshPriority(currentTime);
                 }
+            }
+        }
+
+        for (Cloudlet task : cloudletList) {
+            if (currentTime == ((LowPower.CloudletDedline) task).getArrivalTime()) {
+                this.broker.submitCloudlet(task);
             }
         }
     }
@@ -158,26 +170,17 @@ public final class SLANoDVS {
     /**
      * The scheduler proposed in this paper
      */
-    private static final class TaskScheduler extends DatacenterBrokerSimple {
-        private int nextDatacenterIndex = 0;
-
+    private static final class TaskScheduler extends RoundRobinDatacenterAllocator {
         public TaskScheduler(final CloudSimPlus simulation) {
-            super(simulation, "TaskScheduler");
-        }
-
-        @Override
-        protected Datacenter defaultDatacenterMapper(final Datacenter lastDatacenter, final Vm vm) {
-            final List<Datacenter> datacenters = getDatacenterList();
-            final Datacenter result = datacenters.get(nextDatacenterIndex);
-            nextDatacenterIndex = (nextDatacenterIndex + 1) % datacenters.size();
-            System.out.println("Mapping VM " + vm.getId() + " to datacenter " + result.getId());
-            return result;
+            super(simulation);
         }
 
         @Override
         protected Vm defaultVmMapper(Cloudlet task) {
+            System.out.println("Mapping task " + task.getId());
             // If this task is assigned to a VM, just return that
             if (task.isBoundToVm()) {
+                System.out.println("TASK ALREADY MAPPED");
                 return task.getVm();
             }
 
@@ -202,13 +205,16 @@ public final class SLANoDVS {
                     searchIndex = 0;
                     break;
             }
-            for (; searchIndex < sortedVms.size(); searchIndex++)
-                if (sortedVms.get(searchIndex).isIdle()) { // TODO: Change this
-                    final Vm result = sortedVms.get(searchIndex);
-                    System.out.println("Mapping task " + task.getId() + " to VM " + result.getId());
-                    return result;
+            for (; searchIndex < sortedVms.size(); searchIndex++) {
+                final LowPower.VmWithTaskCounter vm = (LowPower.VmWithTaskCounter) sortedVms.get(searchIndex);
+                if (vm.canHandleTask()) { // TODO: Change this
+                    vm.addTask();
+                    System.out.println("Mapping task " + task.getId() + " to VM " + vm.getId());
+                    return vm;
                 }
-            return null;
+            }
+            System.out.println("Cannot map task " + task.getId());
+            return Vm.NULL;
         }
     }
 }

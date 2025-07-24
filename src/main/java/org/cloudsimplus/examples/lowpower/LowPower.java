@@ -4,8 +4,11 @@ import java.util.List;
 import java.util.Random;
 
 import org.cloudsimplus.brokers.DatacenterBroker;
+import org.cloudsimplus.brokers.DatacenterBrokerSimple;
 import org.cloudsimplus.cloudlets.Cloudlet;
 import org.cloudsimplus.cloudlets.CloudletSimple;
+import org.cloudsimplus.core.CloudSimPlus;
+import org.cloudsimplus.datacenters.Datacenter;
 import org.cloudsimplus.distributions.PoissonDistr;
 import org.cloudsimplus.hosts.Host;
 import org.cloudsimplus.listeners.CloudletVmEventInfo;
@@ -37,19 +40,23 @@ public final class LowPower {
 
     public static final int DATACENTERS = 3;
     public static final int HOSTS = 100;
+    // In this simulation, each VM will be mapped to one host and multiple tasks
+    // will be
+    // assigned to each VM.
     public static final int VMS = HOSTS * DATACENTERS;
-    public static final int CLOUDLETS = 500;
+    public static final int CLOUDLETS = 5 * VMS;
     public static final int SCHEDULE_TIME_TO_PROCESS_DATACENTER_EVENTS = 5;
 
     public static final Random rng = new Random();
 
     public static final double MTTF = 8640;
     public static final PoissonDistr FAILURE_RNG = new PoissonDistr(1 / MTTF);
+    public static final double SIMULATION_INTERVAL = 1;
 
     /**
      * The cycle which we renew the priority of each task
      */
-    public static final double T_p = 100;
+    public static final long T_p = 100;
 
     /**
      * For a set of hosts, writes their CPU utlization
@@ -76,8 +83,10 @@ public final class LowPower {
      */
     static void createAndSubmitVms(DatacenterBroker broker, List<Vm> vmList) {
         for (int i = 0; i < LowPower.VMS; i++) {
-            final Vm vm = new VmSimple(vmList.size(), LowPower.VM_MIPS[LowPower.rng.nextInt(LowPower.VM_MIPS.length)],
-                    LowPower.VM_PES_NUM)
+            final int maximumTasks = rng.nextInt(2, 4);
+            final Vm vm = new VmWithTaskCounter(vmList.size(),
+                    LowPower.VM_MIPS[LowPower.rng.nextInt(LowPower.VM_MIPS.length)],
+                    LowPower.VM_PES_NUM, maximumTasks)
                     .setRam(LowPower.VM_RAM).setBw(LowPower.VM_BW).setSize(LowPower.VM_SIZE)
                     .setCloudletScheduler(new CloudletSchedulerTimeShared());
             vm.enableUtilizationStats();
@@ -89,41 +98,78 @@ public final class LowPower {
     /**
      * Creates the tasks to be sent to system
      */
-    static void createAndSubmitCloudlets(DatacenterBroker broker, List<Cloudlet> cloudletList, EventListener<CloudletVmEventInfo> onFinishListener) {
-        double currentArrivalTime = 0;
+    static void createCloudlets(List<Cloudlet> cloudletList, EventListener<CloudletVmEventInfo> onFinishListener) {
+        long currentArrivalTime = 0;
         final UtilizationModel um = new UtilizationModelDynamic(UtilizationModel.Unit.ABSOLUTE, 50);
-        for (int i = 1; i <= LowPower.CLOUDLETS; i++) {
+        for (int i = 1; i <= CLOUDLETS; i++) {
             UtilizationModelDynamic cpuUtilizationModel = new UtilizationModelDynamic(
-                    LowPower.CLOUDLET_CPU_USAGE_PERCENT);
+                    CLOUDLET_CPU_USAGE_PERCENT);
 
-            final int deadline = 5 + LowPower.rng.nextInt(5);
-            final Cloudlet c = new LowPower.CloudletDedline(
-                    i, LowPower.CLOUDLET_LENGHT, 1, deadline)
-                    .setFileSize(LowPower.CLOUDLET_FILESIZE)
-                    .setOutputSize(LowPower.CLOUDLET_OUTPUTSIZE)
+            final long deadline = 25 + rng.nextInt(25) + currentArrivalTime;
+            final int closestDatacenter = rng.nextInt(DATACENTERS);
+            final Cloudlet c = new CloudletDedline(
+                    i, CLOUDLET_LENGHT, 1, deadline, currentArrivalTime, closestDatacenter)
+                    .setFileSize(CLOUDLET_FILESIZE)
+                    .setOutputSize(CLOUDLET_OUTPUTSIZE)
                     .setUtilizationModelCpu(cpuUtilizationModel)
                     .setUtilizationModelRam(um)
                     .setUtilizationModelBw(um);
-            c.setSubmissionDelay(currentArrivalTime);
             c.addOnFinishListener(onFinishListener);
             // Random arrival time
-            currentArrivalTime += (double) LowPower.rng.nextInt(5) / 10;
+            currentArrivalTime += rng.nextInt(5);
             cloudletList.add(c);
         }
+    }
 
-        broker.submitCloudletList(cloudletList);
+    /**
+     * Based on equation 14, we need to keep track of maximum number of tasks that
+     * each VM can
+     * handle.
+     */
+    static final class VmWithTaskCounter extends VmSimple {
+        private final int maxExecutingTasks;
+        private int currentExecutingTasks = 0;
+
+        public VmWithTaskCounter(long id, long mipsCapacity, long pesNumber, int maxExecutingTasks) {
+            super(id, mipsCapacity, pesNumber);
+            this.maxExecutingTasks = maxExecutingTasks;
+        }
+
+        public boolean canHandleTask() {
+            return currentExecutingTasks < maxExecutingTasks;
+        }
+
+        public void addTask() {
+            currentExecutingTasks++;
+        }
+
+        public void finishTask() {
+            currentExecutingTasks--;
+        }
     }
 
     /**
      * A task which has a deadline and its priority is tied to the deadline
      */
     static final class CloudletDedline extends CloudletSimple {
-        private final double deadline;
+        private final long arrivalTime, deadline;
+        private final int closestDatacenter;
 
-        public CloudletDedline(final long id, final long length, final long pesNumber, final double deadline) {
+        public CloudletDedline(final long id, final long length, final long pesNumber, final long deadline,
+                final long arrivalTime, final int closestDatacenter) {
             super(id, length, pesNumber);
             this.deadline = deadline;
+            this.closestDatacenter = closestDatacenter;
+            this.arrivalTime = arrivalTime;
             refreshPriority(0);
+        }
+
+        public int getClosestDatacenter() {
+            return closestDatacenter;
+        }
+
+        public long getArrivalTime() {
+            return arrivalTime;
         }
 
         /**
@@ -131,14 +177,38 @@ public final class LowPower {
          * 
          * @param currentTime The current time of the simulation
          */
-        public void refreshPriority(final double currentTime) {
-            final double remainingTime = deadline - currentTime;
+        public void refreshPriority(final long currentTime) {
+            final long remainingTime = deadline - currentTime;
             if (remainingTime < LowPower.T_p)
                 setPriority(3); // High
             else if (remainingTime < 2 * LowPower.T_p)
                 setPriority(2); // Medium
             else
                 setPriority(1); // Low
+        }
+    }
+
+    /**
+     * Each VM must be allocated to one host in each datacenter. In this class,
+     * defaultDatacenterMapper
+     * is overridden in order to control that each VM will be send to each
+     * datacenter in a round robin
+     * fasion. This causes each VM to be allocated to one and only host.
+     */
+    static class RoundRobinDatacenterAllocator extends DatacenterBrokerSimple {
+        private int nextDatacenterIndex = 0;
+
+        public RoundRobinDatacenterAllocator(final CloudSimPlus simulation) {
+            super(simulation, "RoundRobinDatacenterAllocator");
+        }
+
+        @Override
+        protected Datacenter defaultDatacenterMapper(final Datacenter lastDatacenter, final Vm vm) {
+            final List<Datacenter> datacenters = getDatacenterList();
+            final Datacenter result = datacenters.get(nextDatacenterIndex);
+            nextDatacenterIndex = (nextDatacenterIndex + 1) % datacenters.size();
+            System.out.println("Mapping VM " + vm.getId() + " to datacenter " + result.getId());
+            return result;
         }
     }
 }

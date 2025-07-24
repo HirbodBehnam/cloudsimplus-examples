@@ -1,13 +1,11 @@
 package org.cloudsimplus.examples.lowpower;
 
-import org.cloudsimplus.brokers.DatacenterBroker;
-import org.cloudsimplus.brokers.DatacenterBrokerSimple;
 import org.cloudsimplus.builders.tables.CloudletsTableBuilder;
 import org.cloudsimplus.cloudlets.Cloudlet;
-import org.cloudsimplus.cloudlets.Cloudlet.Status;
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
 import org.cloudsimplus.datacenters.DatacenterSimple;
+import org.cloudsimplus.examples.lowpower.LowPower.RoundRobinDatacenterAllocator;
 import org.cloudsimplus.hosts.Host;
 import org.cloudsimplus.hosts.HostSimple;
 import org.cloudsimplus.listeners.CloudletVmEventInfo;
@@ -15,10 +13,8 @@ import org.cloudsimplus.power.models.PowerModelHostSimple;
 import org.cloudsimplus.provisioners.ResourceProvisionerSimple;
 import org.cloudsimplus.resources.Pe;
 import org.cloudsimplus.resources.PeSimple;
-import org.cloudsimplus.schedulers.cloudlet.CloudletSchedulerTimeShared;
 import org.cloudsimplus.schedulers.vm.VmSchedulerTimeShared;
 import org.cloudsimplus.vms.Vm;
-import org.cloudsimplus.vms.VmSimple;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -34,6 +30,7 @@ public final class RoundRobin {
     private final List<Host> allHostList;
     private final List<Cloudlet> cloudletList;
     private final List<Cloudlet> failedTasks = new ArrayList<>();
+    private final RoundRobinDatacenterAllocator broker;
 
     public static void main(String[] args) {
         new RoundRobin();
@@ -52,16 +49,21 @@ public final class RoundRobin {
             this.datacenterList.add(createDatacenter());
 
         // DatacenterBrokerSimple is basically round robin
-        final var broker = new DatacenterBrokerSimple(simulation);
+        broker = new RoundRobinDatacenterAllocator(simulation);
 
         LowPower.createAndSubmitVms(broker, vmList);
-        LowPower.createAndSubmitCloudlets(broker, cloudletList, this::taskFinishedCallback);
+        LowPower.createCloudlets(cloudletList, this::taskFinishedCallback);
+        // We must at least submit one cloudlet apparently
+        broker.submitCloudlet(cloudletList.get(0));
 
-        simulation.start();
+        simulation.startSync();
+        long currentTime = 0;
+        while (simulation.isRunning()) {
+            simulationTick(currentTime);
+            simulation.runFor(LowPower.SIMULATION_INTERVAL);
+            currentTime++;
+        }
 
-        // Fail the tasks after the simulation is done
-        for (Cloudlet c : failedTasks)
-            c.setStatus(Status.FAILED);
         new CloudletsTableBuilder(cloudletList).build();
 
         LowPower.printHostsCpuUtilizationAndPowerConsumption(allHostList);
@@ -99,6 +101,19 @@ public final class RoundRobin {
             System.out.println("FAILED task " + task.getCloudlet().getId());
             failedTasks.add(task.getCloudlet());
             // We don't reschedule the task in round robin
+        }
+    }
+
+    /**
+     * This is called on every tick of the simulation
+     * We will update the priority of each task in some ticks.
+     * It will also submit the tasks which arrive.
+     */
+    private void simulationTick(long currentTime) {
+        for (Cloudlet task : cloudletList) {
+            if (currentTime == ((LowPower.CloudletDedline) task).getArrivalTime()) {
+                this.broker.submitCloudlet(task);
+            }
         }
     }
 }
