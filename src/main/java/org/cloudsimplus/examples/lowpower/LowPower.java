@@ -40,12 +40,20 @@ public final class LowPower {
 
     public static final int DATACENTERS = 3;
     public static final int HOSTS = 100;
-    // In this simulation, each VM will be mapped to one host and multiple tasks
-    // will be
-    // assigned to each VM.
+    /**
+     * In this simulation, each VM will be mapped to one host and multiple tasks
+     * will be assigned to each VM.
+     */
     public static final int VMS = HOSTS * DATACENTERS;
     public static final int CLOUDLETS = 5 * VMS;
     public static final int SCHEDULE_TIME_TO_PROCESS_DATACENTER_EVENTS = 5;
+    /**
+     * Equation 15 looks wrong to me so I changed it. At the very first, the workload
+     * of the datacenter is zero. Thus equation 15 will always return 0. On the otherhand,
+     * the text above it suggests that the second Wl_mean is another variable. Thus, I
+     * will simply replace Wl_mean / alpha with this variable
+     */
+    public static final double ALPHA_WORKLOAD = 0.5;
 
     public static final Random rng = new Random();
 
@@ -106,7 +114,7 @@ public final class LowPower {
                     CLOUDLET_CPU_USAGE_PERCENT);
 
             final long deadline = 25 + rng.nextInt(25) + currentArrivalTime;
-            final int closestDatacenter = rng.nextInt(DATACENTERS);
+            final int closestDatacenter = rng.nextInt(DATACENTERS) + 1;
             final Cloudlet c = new CloudletDedline(
                     i, CLOUDLET_LENGHT, 1, deadline, currentArrivalTime, closestDatacenter)
                     .setFileSize(CLOUDLET_FILESIZE)
@@ -135,8 +143,23 @@ public final class LowPower {
             this.maxExecutingTasks = maxExecutingTasks;
         }
 
+        /**
+         * This function will execute formula 13 of the paper to check if
+         * this VM can handle a task or not
+         * @return True if it can handle it, otherwise false
+         */
         public boolean canHandleTask() {
-            return currentExecutingTasks < maxExecutingTasks;
+            // If we are full on number of tasks, just return false
+            if (currentExecutingTasks >= maxExecutingTasks)
+                return false;
+            // Otherwise, check datacenter workload
+            final double hostWorkload = getHost().getCpuPercentUtilization();
+            final double datacenterWorkload = getHost().getDatacenter().getHostList()
+                .stream()
+                .mapToDouble(pm -> pm.getCpuPercentUtilization())
+                .average()
+                .orElse(Double.NaN);
+            return hostWorkload <= datacenterWorkload + ALPHA_WORKLOAD;
         }
 
         public void addTask() {

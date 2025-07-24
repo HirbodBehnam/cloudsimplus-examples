@@ -183,15 +183,42 @@ public final class SLANoDVS {
                 System.out.println("TASK ALREADY MAPPED");
                 return task.getVm();
             }
-
-            // Get list of all VMs and calculate the score of them
             if (getVmExecList().isEmpty())
                 return Vm.NULL;
 
             // Sort all virtual machines by their score
-            final List<Vm> sortedVms = getVmExecList().stream()
-                    .sorted(Comparator.comparing(c -> ((ScoredPM) (((Vm) c).getHost())).getScore())).toList();
+            List<Vm> sortedVms = getVmExecList().stream()
+                    .filter(vm -> vm.getHost().getDatacenter().getId() == ((LowPower.CloudletDedline) task)
+                            .getClosestDatacenter())
+                    .sorted(Comparator.comparing(c -> ((ScoredPM) (((Vm) c).getHost())).getScore()))
+                    .toList();
+            if (sortedVms.size() == 0)
+                throw new RuntimeException(
+                        "Invalid datacenter ID? Need " + ((LowPower.CloudletDedline) task).getClosestDatacenter());
 
+            // Schedule in the datacenter
+            Vm selectedVm = selectVmFromList(sortedVms, task);
+            if (selectedVm != null) {
+                System.out.println("Mapping task " + task.getId() + " to VM " + selectedVm.getId());
+                return selectedVm;
+            }
+            System.out.println("Cannot map task " + task.getId() + " inside datacenter");
+
+            // External scheduling
+            sortedVms = getVmExecList().stream()
+                    .sorted(Comparator.comparing(c -> ((ScoredPM) (((Vm) c).getHost())).getScore()))
+                    .toList();
+            selectedVm = selectVmFromList(sortedVms, task);
+            if (selectedVm != null) {
+                System.out.println("Mapping task " + task.getId() + " to VM " + selectedVm.getId());
+                return selectedVm;
+            }
+            System.out.println("Cannot map task " + task.getId());
+
+            return Vm.NULL;
+        }
+
+        private static Vm selectVmFromList(List<Vm> sortedVms, Cloudlet task) {
             // Based on the priority, find a suitable VM
             int searchIndex;
             switch (task.getPriority()) {
@@ -207,14 +234,13 @@ public final class SLANoDVS {
             }
             for (; searchIndex < sortedVms.size(); searchIndex++) {
                 final LowPower.VmWithTaskCounter vm = (LowPower.VmWithTaskCounter) sortedVms.get(searchIndex);
-                if (vm.canHandleTask()) { // TODO: Change this
+                if (vm.canHandleTask()) {
                     vm.addTask();
-                    System.out.println("Mapping task " + task.getId() + " to VM " + vm.getId());
                     return vm;
                 }
             }
-            System.out.println("Cannot map task " + task.getId());
-            return Vm.NULL;
+
+            return null;
         }
     }
 }
