@@ -98,21 +98,27 @@ public final class SLANoDVS {
     /**
      * When each tasks finishes, we might fail it based on a random number
      */
-    private void taskFinishedCallback(CloudletVmEventInfo task) {
-        final LowPower.VmWithTaskCounter virtualMachine = (LowPower.VmWithTaskCounter) task.getVm();
+    private void taskFinishedCallback(CloudletVmEventInfo cloudletInfo) {
+        final LowPower.CloudletDedline task = (LowPower.CloudletDedline) cloudletInfo.getCloudlet();
+        final LowPower.VmWithTaskCounter virtualMachine = (LowPower.VmWithTaskCounter) cloudletInfo.getVm();
         final ScoredPM physicalMachine = (ScoredPM) virtualMachine.getHost();
 
-        System.out.println("Task " + task.getCloudlet().getId() + " done");
+        System.out.println("Task " + task.getId() + " done");
         virtualMachine.finishTask();
 
         if (LowPower.FAILURE_RNG.eventsHappened()) {
-            System.out.println("FAILED task " + task.getCloudlet().getId());
-            failedTasks.add(task.getCloudlet());
+            System.out.println("FAILED task " + task.getId());
+            failedTasks.add(task);
             physicalMachine.taskDone(false);
+            task.failedTask();
 
-            // TODO: Reschedule the task
+            // Reschedule the task
+            broker.submitCloudlet(task);
         } else {
             physicalMachine.taskDone(true);
+
+            // Remove tasks that failed once
+            failedTasks.removeIf(t -> task.getId() == t.getId());
         }
     }
 
@@ -186,29 +192,35 @@ public final class SLANoDVS {
             if (getVmExecList().isEmpty())
                 return Vm.NULL;
 
-            // Sort all virtual machines by their score
+            // If this task has failed a lot of times, schedule it in other datacenters
+            if (((LowPower.CloudletDedline) task).getFailedCount() < 2) {
+
+                // Sort all virtual machines by their score
+                List<Vm> sortedVms = getVmExecList().stream()
+                        .filter(vm -> vm.getHost().getDatacenter().getId() == ((LowPower.CloudletDedline) task)
+                                .getClosestDatacenter())
+                        .sorted(Comparator.comparing(c -> ((ScoredPM) (((Vm) c).getHost())).getScore()))
+                        .toList();
+                if (sortedVms.size() == 0)
+                    throw new RuntimeException(
+                            "Invalid datacenter ID? Need " + ((LowPower.CloudletDedline) task).getClosestDatacenter());
+
+                // Schedule in the datacenter
+                Vm selectedVm = selectVmFromList(sortedVms, task);
+                if (selectedVm != null) {
+                    System.out.println("Mapping task " + task.getId() + " to VM " + selectedVm.getId());
+                    return selectedVm;
+                }
+                System.out.println("Cannot map task " + task.getId() + " inside datacenter");
+            }
+
+            // External scheduling
             List<Vm> sortedVms = getVmExecList().stream()
-                    .filter(vm -> vm.getHost().getDatacenter().getId() == ((LowPower.CloudletDedline) task)
+                    .filter(vm -> vm.getHost().getDatacenter().getId() != ((LowPower.CloudletDedline) task)
                             .getClosestDatacenter())
                     .sorted(Comparator.comparing(c -> ((ScoredPM) (((Vm) c).getHost())).getScore()))
                     .toList();
-            if (sortedVms.size() == 0)
-                throw new RuntimeException(
-                        "Invalid datacenter ID? Need " + ((LowPower.CloudletDedline) task).getClosestDatacenter());
-
-            // Schedule in the datacenter
             Vm selectedVm = selectVmFromList(sortedVms, task);
-            if (selectedVm != null) {
-                System.out.println("Mapping task " + task.getId() + " to VM " + selectedVm.getId());
-                return selectedVm;
-            }
-            System.out.println("Cannot map task " + task.getId() + " inside datacenter");
-
-            // External scheduling
-            sortedVms = getVmExecList().stream()
-                    .sorted(Comparator.comparing(c -> ((ScoredPM) (((Vm) c).getHost())).getScore()))
-                    .toList();
-            selectedVm = selectVmFromList(sortedVms, task);
             if (selectedVm != null) {
                 System.out.println("Mapping task " + task.getId() + " to VM " + selectedVm.getId());
                 return selectedVm;

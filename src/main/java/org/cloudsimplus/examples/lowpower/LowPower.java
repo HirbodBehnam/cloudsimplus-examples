@@ -177,6 +177,7 @@ public final class LowPower {
     static final class CloudletDedline extends CloudletSimple {
         private final long arrivalTime, deadline;
         private final int closestDatacenter;
+        private int failedCount = 0;
 
         public CloudletDedline(final long id, final long length, final long pesNumber, final long deadline,
                 final long arrivalTime, final int closestDatacenter) {
@@ -208,6 +209,20 @@ public final class LowPower {
                 setPriority(2); // Medium
             else
                 setPriority(1); // Low
+        }
+
+        /**
+         * Indicates that this task has failed
+         */
+        public void failedTask() {
+            failedCount++;
+        }
+
+        /**
+         * @return How many times this task has failed
+         */
+        public int getFailedCount() {
+            return failedCount;
         }
     }
 
