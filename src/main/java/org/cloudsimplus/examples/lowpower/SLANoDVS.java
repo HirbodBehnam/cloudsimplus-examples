@@ -1,6 +1,5 @@
 package org.cloudsimplus.examples.lowpower;
 
-import org.cloudsimplus.builders.tables.CloudletsTableBuilder;
 import org.cloudsimplus.cloudlets.Cloudlet;
 import org.cloudsimplus.cloudlets.Cloudlet.Status;
 import org.cloudsimplus.core.CloudSimPlus;
@@ -31,8 +30,7 @@ public final class SLANoDVS {
     private long currentTime = 0;
 
     private final List<Host> allHostList;
-    private final List<Cloudlet> cloudletList;
-    private final List<Cloudlet> failedTasks = new ArrayList<>();
+    private final List<LowPower.CloudletDedline> cloudletList;
     private final TaskScheduler broker;
 
     public static void main(String[] args) {
@@ -65,7 +63,7 @@ public final class SLANoDVS {
             currentTime++;
         }
 
-        new CloudletsTableBuilder(cloudletList).build();
+        LowPower.printTaskInformation(cloudletList);
 
         LowPower.printHostsCpuUtilizationAndPowerConsumption(allHostList);
         System.out.println(getClass().getSimpleName() + " finished!");
@@ -108,9 +106,8 @@ public final class SLANoDVS {
 
         if (LowPower.FAILURE_RNG.eventsHappened()) {
             System.out.println("FAILED task " + task.getId());
-            failedTasks.add(task);
             physicalMachine.taskDone(false);
-            task.failedTask();
+            task.failed();
 
             // Reschedule the task
             broker.submitCloudlet(task);
@@ -118,7 +115,7 @@ public final class SLANoDVS {
             physicalMachine.taskDone(true);
 
             // Remove tasks that failed once
-            failedTasks.removeIf(t -> task.getId() == t.getId());
+            task.succeed();
         }
     }
 
@@ -192,18 +189,18 @@ public final class SLANoDVS {
             if (getVmExecList().isEmpty())
                 return Vm.NULL;
 
-            // If this task has failed a lot of times, schedule it in other datacenters
-            if (((LowPower.CloudletDedline) task).getFailedCount() < 2) {
+            final LowPower.CloudletDedline castedTask = (LowPower.CloudletDedline) task;
 
+            // If this task has failed a lot of times, schedule it in other datacenters
+            if (castedTask.getFailedCount() < 2) {
                 // Sort all virtual machines by their score
                 List<Vm> sortedVms = getVmExecList().stream()
-                        .filter(vm -> vm.getHost().getDatacenter().getId() == ((LowPower.CloudletDedline) task)
-                                .getClosestDatacenter())
+                        .filter(vm -> vm.getHost().getDatacenter().getId() == castedTask.getClosestDatacenter())
                         .sorted(Comparator.comparing(c -> ((ScoredPM) (((Vm) c).getHost())).getScore()))
                         .toList();
                 if (sortedVms.size() == 0)
                     throw new RuntimeException(
-                            "Invalid datacenter ID? Need " + ((LowPower.CloudletDedline) task).getClosestDatacenter());
+                            "Invalid datacenter ID? Need " + castedTask.getClosestDatacenter());
 
                 // Schedule in the datacenter
                 Vm selectedVm = selectVmFromList(sortedVms, task);
@@ -216,8 +213,7 @@ public final class SLANoDVS {
 
             // External scheduling
             List<Vm> sortedVms = getVmExecList().stream()
-                    .filter(vm -> vm.getHost().getDatacenter().getId() != ((LowPower.CloudletDedline) task)
-                            .getClosestDatacenter())
+                    .filter(vm -> vm.getHost().getDatacenter().getId() != castedTask.getClosestDatacenter())
                     .sorted(Comparator.comparing(c -> ((ScoredPM) (((Vm) c).getHost())).getScore()))
                     .toList();
             Vm selectedVm = selectVmFromList(sortedVms, task);

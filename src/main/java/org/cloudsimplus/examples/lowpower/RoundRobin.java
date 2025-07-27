@@ -1,6 +1,5 @@
 package org.cloudsimplus.examples.lowpower;
 
-import org.cloudsimplus.builders.tables.CloudletsTableBuilder;
 import org.cloudsimplus.cloudlets.Cloudlet;
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
@@ -28,8 +27,7 @@ public final class RoundRobin {
     private CloudSimPlus simulation;
 
     private final List<Host> allHostList;
-    private final List<Cloudlet> cloudletList;
-    private final List<Cloudlet> failedTasks = new ArrayList<>();
+    private final List<LowPower.CloudletDedline> cloudletList;
     private final RoundRobinDatacenterAllocator broker;
 
     public static void main(String[] args) {
@@ -64,7 +62,7 @@ public final class RoundRobin {
             currentTime++;
         }
 
-        new CloudletsTableBuilder(cloudletList).build();
+        LowPower.printTaskInformation(cloudletList);
 
         LowPower.printHostsCpuUtilizationAndPowerConsumption(allHostList);
         System.out.println(getClass().getSimpleName() + " finished!");
@@ -96,11 +94,15 @@ public final class RoundRobin {
     /**
      * When each tasks finishes, we might fail it based on a random number
      */
-    private void taskFinishedCallback(CloudletVmEventInfo task) {
+    private void taskFinishedCallback(CloudletVmEventInfo cloudletInfo) {
+        final LowPower.CloudletDedline task = (LowPower.CloudletDedline) cloudletInfo.getCloudlet();
+
         if (LowPower.FAILURE_RNG.eventsHappened()) {
-            System.out.println("FAILED task " + task.getCloudlet().getId());
-            failedTasks.add(task.getCloudlet());
+            System.out.println("FAILED task " + task.getId());
+            task.failed();
             // We don't reschedule the task in round robin
+        } else {
+            task.succeed();
         }
     }
 

@@ -5,7 +5,6 @@ import java.util.Random;
 
 import org.cloudsimplus.brokers.DatacenterBroker;
 import org.cloudsimplus.brokers.DatacenterBrokerSimple;
-import org.cloudsimplus.cloudlets.Cloudlet;
 import org.cloudsimplus.cloudlets.CloudletSimple;
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
@@ -37,6 +36,7 @@ public final class LowPower {
     public static final long CLOUDLET_FILESIZE = 300 * 1024;
     public static final long CLOUDLET_OUTPUTSIZE = 300 * 1024;
     public static final double CLOUDLET_CPU_USAGE_PERCENT = 0.75;
+    public static final long CLOUDLET_EXTERNAL_MIGRATION_OVERHEAD = 1;
 
     public static final int DATACENTERS = 3;
     public static final int HOSTS = 100;
@@ -48,9 +48,12 @@ public final class LowPower {
     public static final int CLOUDLETS = 5 * VMS;
     public static final int SCHEDULE_TIME_TO_PROCESS_DATACENTER_EVENTS = 5;
     /**
-     * Equation 15 looks wrong to me so I changed it. At the very first, the workload
-     * of the datacenter is zero. Thus equation 15 will always return 0. On the otherhand,
-     * the text above it suggests that the second Wl_mean is another variable. Thus, I
+     * Equation 15 looks wrong to me so I changed it. At the very first, the
+     * workload
+     * of the datacenter is zero. Thus equation 15 will always return 0. On the
+     * otherhand,
+     * the text above it suggests that the second Wl_mean is another variable. Thus,
+     * I
      * will simply replace Wl_mean / alpha with this variable
      */
     public static final double ALPHA_WORKLOAD = 0.5;
@@ -71,8 +74,8 @@ public final class LowPower {
      * 
      * @param hostList The list to print their CPU utilization
      */
-    public static void printHostsCpuUtilizationAndPowerConsumption(final List<Host> hostList) {
-        System.out.println("Host Power Consumptions:");
+    static void printHostsCpuUtilizationAndPowerConsumption(final List<Host> hostList) {
+        System.out.println("Host ID,Datacenter ID,CPU Usage Mean,Power Consumption Mean");
         for (final Host host : hostList) {
             final HostResourceStats cpuStats = host.getCpuUtilizationStats();
 
@@ -80,8 +83,30 @@ public final class LowPower {
             final double utilizationPercentMean = cpuStats.getMean();
             final double watts = host.getPowerModel().getPower(utilizationPercentMean);
             System.out.printf(
-                    "Host %2d in datacenter %d CPU Usage mean: %6.1f%% | Power Consumption mean: %8.0f W%n",
-                    host.getId(), host.getDatacenter().getId(), utilizationPercentMean * 100, watts);
+                    "%d,%d,%f,%f\n",
+                    host.getId(),
+                    host.getDatacenter().getId(),
+                    utilizationPercentMean * 100,
+                    watts);
+        }
+        System.out.println();
+    }
+
+    static void printTaskInformation(final List<CloudletDedline> tasks) {
+        System.out.println("Task ID,VM ID,Host ID,Datacenter ID,Closest Datacenter,Arrival Time,Start Time,Finish Time,Deadline,Failed Count,Failed");
+        for (CloudletDedline task : tasks) {
+            System.out.printf("%d,%d,%d,%d,%d,%d,%f,%f,%d,%d,%d\n",
+                    task.getId(),
+                    task.getVm().getId(),
+                    task.getVm().getHost().getId(),
+                    task.getVm().getHost().getDatacenter().getId(),
+                    task.getClosestDatacenter(),
+                    task.getArrivalTime(),
+                    task.getStartTime(),
+                    task.getFinishTime(),
+                    task.deadline,
+                    task.getFailedCount(),
+                    task.failed ? 1 : 0);
         }
         System.out.println();
     }
@@ -90,12 +115,12 @@ public final class LowPower {
      * Creates the virtual machines to run on each host
      */
     static void createAndSubmitVms(DatacenterBroker broker, List<Vm> vmList) {
-        for (int i = 0; i < LowPower.VMS; i++) {
+        for (int i = 0; i < VMS; i++) {
             final int maximumTasks = rng.nextInt(2, 4);
             final Vm vm = new VmWithTaskCounter(vmList.size(),
-                    LowPower.VM_MIPS[LowPower.rng.nextInt(LowPower.VM_MIPS.length)],
-                    LowPower.VM_PES_NUM, maximumTasks)
-                    .setRam(LowPower.VM_RAM).setBw(LowPower.VM_BW).setSize(LowPower.VM_SIZE)
+                    VM_MIPS[rng.nextInt(VM_MIPS.length)],
+                    VM_PES_NUM, maximumTasks)
+                    .setRam(VM_RAM).setBw(VM_BW).setSize(VM_SIZE)
                     .setCloudletScheduler(new CloudletSchedulerTimeShared());
             vm.enableUtilizationStats();
             vmList.add(vm);
@@ -106,7 +131,8 @@ public final class LowPower {
     /**
      * Creates the tasks to be sent to system
      */
-    static void createCloudlets(List<Cloudlet> cloudletList, EventListener<CloudletVmEventInfo> onFinishListener) {
+    static void createCloudlets(List<CloudletDedline> cloudletList,
+            EventListener<CloudletVmEventInfo> onFinishListener) {
         long currentArrivalTime = 0;
         final UtilizationModel um = new UtilizationModelDynamic(UtilizationModel.Unit.ABSOLUTE, 50);
         for (int i = 1; i <= CLOUDLETS; i++) {
@@ -115,7 +141,7 @@ public final class LowPower {
 
             final long deadline = 25 + rng.nextInt(25) + currentArrivalTime;
             final int closestDatacenter = rng.nextInt(DATACENTERS) + 1;
-            final Cloudlet c = new CloudletDedline(
+            final CloudletDedline c = (CloudletDedline) new CloudletDedline(
                     i, CLOUDLET_LENGHT, 1, deadline, currentArrivalTime, closestDatacenter)
                     .setFileSize(CLOUDLET_FILESIZE)
                     .setOutputSize(CLOUDLET_OUTPUTSIZE)
@@ -146,6 +172,7 @@ public final class LowPower {
         /**
          * This function will execute formula 13 of the paper to check if
          * this VM can handle a task or not
+         * 
          * @return True if it can handle it, otherwise false
          */
         public boolean canHandleTask() {
@@ -155,10 +182,10 @@ public final class LowPower {
             // Otherwise, check datacenter workload
             final double hostWorkload = getHost().getCpuPercentUtilization();
             final double datacenterWorkload = getHost().getDatacenter().getHostList()
-                .stream()
-                .mapToDouble(pm -> pm.getCpuPercentUtilization())
-                .average()
-                .orElse(Double.NaN);
+                    .stream()
+                    .mapToDouble(pm -> pm.getCpuPercentUtilization())
+                    .average()
+                    .orElse(Double.NaN);
             return hostWorkload <= datacenterWorkload + ALPHA_WORKLOAD;
         }
 
@@ -178,6 +205,7 @@ public final class LowPower {
         private final long arrivalTime, deadline;
         private final int closestDatacenter;
         private int failedCount = 0;
+        private boolean failed;
 
         public CloudletDedline(final long id, final long length, final long pesNumber, final long deadline,
                 final long arrivalTime, final int closestDatacenter) {
@@ -203,9 +231,9 @@ public final class LowPower {
          */
         public void refreshPriority(final long currentTime) {
             final long remainingTime = deadline - currentTime;
-            if (remainingTime < LowPower.T_p)
+            if (remainingTime < T_p)
                 setPriority(3); // High
-            else if (remainingTime < 2 * LowPower.T_p)
+            else if (remainingTime < 2 * T_p)
                 setPriority(2); // Medium
             else
                 setPriority(1); // Low
@@ -214,8 +242,16 @@ public final class LowPower {
         /**
          * Indicates that this task has failed
          */
-        public void failedTask() {
+        public void failed() {
             failedCount++;
+            failed = true;
+        }
+
+        /**
+         * This method must be called when task is successfully ran
+         */
+        public void succeed() {
+            failed = false;
         }
 
         /**
@@ -223,6 +259,22 @@ public final class LowPower {
          */
         public int getFailedCount() {
             return failedCount;
+        }
+
+        /**
+         * This method will check if the task has failed based on its deadline and
+         * status.
+         * @return True if the task has failed
+         */
+        public boolean isFailed() {
+            // The task must internally succeed in the cloudsim in order to be processed
+            if (getStatus() != Status.SUCCESS)
+                return false;
+            // Manually failed task
+            if (failed)
+                return false;
+            // Check deadline
+            return getFinishTime() <= deadline; 
         }
     }
 
