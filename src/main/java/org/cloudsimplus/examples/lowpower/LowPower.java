@@ -106,7 +106,7 @@ public final class LowPower {
                     task.getFinishTime(),
                     task.deadline,
                     task.getFailedCount(),
-                    task.failed ? 1 : 0);
+                    task.isFailed() ? 1 : 0);
         }
         System.out.println();
     }
