@@ -94,8 +94,10 @@ public final class LowPower {
 
     static void printTaskInformation(final List<CloudletDedline> tasks) {
         System.out.println("Task ID,VM ID,Host ID,Datacenter ID,Closest Datacenter,Arrival Time,Start Time,Finish Time,Deadline,Failed Count,Failed");
+        int failedCount = 0;
         for (CloudletDedline task : tasks) {
-            System.out.printf("%d,%d,%d,%d,%d,%d,%f,%f,%d,%d,%d\n",
+            boolean failed = task.isFailed();
+            System.out.printf("%d,%d,%d,%d,%d,%f,%f,%f,%f,%d,%d\n",
                     task.getId(),
                     task.getVm().getId(),
                     task.getVm().getHost().getId(),
@@ -104,10 +106,13 @@ public final class LowPower {
                     task.getArrivalTime(),
                     task.getStartTime(),
                     task.getFinishTime(),
-                    task.deadline,
+                    task.getDeadline(),
                     task.getFailedCount(),
-                    task.isFailed() ? 1 : 0);
+                    failed ? 1 : 0);
+            if (failed)
+                failedCount++;
         }
+        System.out.println("Failure rate: " + ((double) failedCount) / tasks.size());
         System.out.println();
     }
 
@@ -202,13 +207,13 @@ public final class LowPower {
      * A task which has a deadline and its priority is tied to the deadline
      */
     static final class CloudletDedline extends CloudletSimple {
-        private final long arrivalTime, deadline;
+        private final double arrivalTime, deadline;
         private final int closestDatacenter;
         private int failedCount = 0;
         private boolean failed;
 
-        public CloudletDedline(final long id, final long length, final long pesNumber, final long deadline,
-                final long arrivalTime, final int closestDatacenter) {
+        public CloudletDedline(final long id, final long length, final long pesNumber, final double deadline,
+                final double arrivalTime, final int closestDatacenter) {
             super(id, length, pesNumber);
             this.deadline = deadline;
             this.closestDatacenter = closestDatacenter;
@@ -220,7 +225,11 @@ public final class LowPower {
             return closestDatacenter;
         }
 
-        public long getArrivalTime() {
+        public double getDeadline() {
+            return deadline;
+        }
+
+        public double getArrivalTime() {
             return arrivalTime;
         }
 
@@ -229,8 +238,8 @@ public final class LowPower {
          * 
          * @param currentTime The current time of the simulation
          */
-        public void refreshPriority(final long currentTime) {
-            final long remainingTime = deadline - currentTime;
+        public void refreshPriority(final double currentTime) {
+            final double remainingTime = deadline - currentTime;
             if (remainingTime < T_p)
                 setPriority(3); // High
             else if (remainingTime < 2 * T_p)
@@ -269,12 +278,12 @@ public final class LowPower {
         public boolean isFailed() {
             // The task must internally succeed in the cloudsim in order to be processed
             if (getStatus() != Status.SUCCESS)
-                return false;
+                return true;
             // Manually failed task
             if (failed)
-                return false;
+                return true;
             // Check deadline
-            return getFinishTime() <= deadline; 
+            return getFinishTime() > deadline; 
         }
     }
 
