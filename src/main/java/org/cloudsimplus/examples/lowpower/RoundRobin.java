@@ -38,7 +38,6 @@ public final class RoundRobin {
     }
 
     private RoundRobin() {
-        System.out.println("Starting " + getClass().getSimpleName());
         simulation = new CloudSimPlus();
 
         this.cloudletList = new ArrayList<>(LowPower.CLOUDLETS);

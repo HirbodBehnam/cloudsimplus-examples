@@ -1,10 +1,13 @@
 package org.cloudsimplus.examples.lowpower;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Random;
 
 import org.cloudsimplus.brokers.DatacenterBroker;
 import org.cloudsimplus.brokers.DatacenterBrokerSimple;
+import org.cloudsimplus.cloudlets.Cloudlet;
 import org.cloudsimplus.cloudlets.CloudletSimple;
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
@@ -70,11 +73,17 @@ public final class LowPower {
     public static final long T_p = 100;
 
     /**
+     * We can multiply the frequency of each PE by this value
+     */
+    public static final double MAX_DVS_RATIO = 0.7;
+
+    /**
      * For a set of hosts, writes their CPU utlization
      * 
      * @param hostList The list to print their CPU utilization
      */
     static void printHostsCpuUtilizationAndPowerConsumption(final List<Host> hostList) {
+        double totalPower = 0;
         System.out.println("Host ID,Datacenter ID,CPU Usage Mean,Power Consumption Mean");
         for (final Host host : hostList) {
             final HostResourceStats cpuStats = host.getCpuUtilizationStats();
@@ -82,6 +91,7 @@ public final class LowPower {
             // The total Host's CPU utilization for the time specified by the map key
             final double utilizationPercentMean = cpuStats.getMean();
             final double watts = host.getPowerModel().getPower(utilizationPercentMean);
+            totalPower += watts;
             System.out.printf(
                     "%d,%d,%f,%f\n",
                     host.getId(),
@@ -89,6 +99,7 @@ public final class LowPower {
                     utilizationPercentMean * 100,
                     watts);
         }
+        System.out.printf("Total power: %f W\n", totalPower);
         System.out.println();
     }
 
@@ -162,16 +173,17 @@ public final class LowPower {
 
     /**
      * Based on equation 14, we need to keep track of maximum number of tasks that
-     * each VM can
-     * handle.
+     * each VM can handle.
      */
     static final class VmWithTaskCounter extends VmSimple {
         private final int maxExecutingTasks;
-        private int currentExecutingTasks = 0;
+        // Map from ID to task
+        private final HashMap<Long, Cloudlet> currentExecutingTasks;
 
         public VmWithTaskCounter(long id, long mipsCapacity, long pesNumber, int maxExecutingTasks) {
             super(id, mipsCapacity, pesNumber);
             this.maxExecutingTasks = maxExecutingTasks;
+            this.currentExecutingTasks = new HashMap<>(maxExecutingTasks);
         }
 
         /**
@@ -182,7 +194,7 @@ public final class LowPower {
          */
         public boolean canHandleTask() {
             // If we are full on number of tasks, just return false
-            if (currentExecutingTasks >= maxExecutingTasks)
+            if (currentExecutingTasks.size() >= maxExecutingTasks)
                 return false;
             // Otherwise, check datacenter workload
             final double hostWorkload = getHost().getCpuPercentUtilization();
@@ -194,12 +206,16 @@ public final class LowPower {
             return hostWorkload <= datacenterWorkload + ALPHA_WORKLOAD;
         }
 
-        public void addTask() {
-            currentExecutingTasks++;
+        public void addTask(Cloudlet task) {
+            currentExecutingTasks.put(task.getId(), task);
         }
 
-        public void finishTask() {
-            currentExecutingTasks--;
+        public void finishTask(long taskID) {
+            currentExecutingTasks.remove(taskID);
+        }
+
+        public List<Cloudlet> getAllocatedTasks() {
+            return new ArrayList<>(currentExecutingTasks.values());
         }
     }
 
