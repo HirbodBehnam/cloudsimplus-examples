@@ -12,7 +12,8 @@ import org.cloudsimplus.hosts.Host;
 import org.cloudsimplus.hosts.HostSimple;
 import org.cloudsimplus.listeners.CloudletVmEventInfo;
 import org.cloudsimplus.listeners.EventInfo;
-import org.cloudsimplus.power.models.PowerModelHostSimple;
+import org.cloudsimplus.power.PowerMeasurement;
+import org.cloudsimplus.power.models.PowerModelHostAbstract;
 import org.cloudsimplus.provisioners.ResourceProvisionerSimple;
 import org.cloudsimplus.resources.Pe;
 import org.cloudsimplus.resources.PeSimple;
@@ -21,6 +22,7 @@ import org.cloudsimplus.vms.Vm;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 
 /**
@@ -36,6 +38,8 @@ public final class SLADVSAlgorithm {
     private final TaskScheduler broker;
 
     private final boolean dvsEnabled;
+    private final double lastDeadline;
+    private final HashSet<Long> processedTicks;
 
     SLADVSAlgorithm(boolean dvsEnabled) {
         simulation = new CloudSimPlus();
@@ -55,7 +59,9 @@ public final class SLADVSAlgorithm {
         LowPower.createAndSubmitVms(broker, vmList);
         LowPower.createCloudlets(cloudletList, this::taskFinishedCallback);
         // We must at least submit one cloudlet apparently
-        simulation.terminateAt(cloudletList.stream().mapToDouble(CloudletDedline::getDeadline).max().orElseThrow());
+        lastDeadline = cloudletList.stream().mapToDouble(CloudletDedline::getDeadline).max().orElseThrow();
+        simulation.terminateAt(lastDeadline);
+        processedTicks = new HashSet<>((int) lastDeadline);
         broker.submitCloudlet(cloudletList.get(0));
 
         simulation.addOnClockTickListener(this::simulationTick);
@@ -78,7 +84,7 @@ public final class SLADVSAlgorithm {
             // Create the physical machine
             final var host = new ScoredPM(LowPower.HOST_RAM, LowPower.HOST_BW, LowPower.HOST_STORAGE, peList,
                     LowPower.MTTF);
-            host.setPowerModel(new PowerModelHostSimple(1000, 700));
+            host.setPowerModel(new DVFSPowerModel(1000, 100));
             host.setRamProvisioner(new ResourceProvisionerSimple());
             host.setBwProvisioner(new ResourceProvisionerSimple());
             host.setVmScheduler(new VmSchedulerTimeShared());
@@ -124,13 +130,14 @@ public final class SLADVSAlgorithm {
      */
     private void simulationTick(EventInfo event) {
         System.out.println("TICK " + event.getTime());
-        if ((long) event.getTime() % LowPower.T_p == 0) {
+        if ((long) event.getTime() % LowPower.T_p == 0 && !processedTicks.contains((long) event.getTime())) {
             // Referesh task priority
             for (Cloudlet c : cloudletList) {
                 if (c.getStatus() != Status.SUCCESS) {
                     ((LowPower.CloudletDedline) c).refreshPriority(event.getTime());
                 }
             }
+
             // DVFS VMs
             if (dvsEnabled) {
                 List<Vm> dvsVMs = vmList.stream()
@@ -140,18 +147,34 @@ public final class SLADVSAlgorithm {
                         .subList(0, vmList.size() * 7 / 10);
                 for (Vm vm : dvsVMs) {
                     // See the maxinum amount we can DVFS
-                    double dvfsFactor = 1;
+                    double hostMIPS = vm.getMips();
+                    double dvfsFactor = 0;
                     for (Cloudlet c : ((VmWithTaskCounter) vm).getAllocatedTasks()) {
-                        // TODO: do something?
+                        double timeRunning = c.getFinishedLengthSoFar() / hostMIPS;
+                        double totalTime = c.getLength() / hostMIPS;
+                        double timeLeft = totalTime - timeRunning;
+                        if (timeLeft < 0) // Just a failsafe
+                            throw new RuntimeException("negative timeLeft in DVFS");
+                        double timeToDeadline = ((LowPower.CloudletDedline) c).getDeadline() - event.getTime();
+                        if (timeToDeadline <= 0) { // Deadline missed :(
+                            dvfsFactor = 1;
+                            break;
+                        }
+                        double newDvfsFactor = timeLeft / timeToDeadline;
+                        dvfsFactor = Math.min(1, Math.max(dvfsFactor, newDvfsFactor));
                     }
+                    dvfsFactor = Math.max(LowPower.MIN_DVS_RATIO, Math.min(dvfsFactor * 1.1, 1));
                     // Enable DVFS
                     for (Pe pe : vm.getHost().getPeList()) {
-                        long newAllocatedResources = (long) (pe.getCapacity() * dvfsFactor);
-                        //System.out.printf("DVFS %d: %d (from %d)\n", vm.getId(), pe.getCapacity(), newAllocatedResources);
+                        long newAllocatedResources = (long) (Math.ceil(pe.getCapacity() * dvfsFactor));
                         pe.setAllocatedResource(newAllocatedResources);
                     }
+                    ((DVFSPowerModel) vm.getHost().getPowerModel()).addDvfsTick(dvfsFactor, event.getTime());
                 }
             }
+
+            // Do not process this tick again
+            processedTicks.add((long) event.getTime());
         }
 
         for (Cloudlet task : cloudletList) {
@@ -273,6 +296,99 @@ public final class SLADVSAlgorithm {
                 successfulTasks++;
             else
                 failedTasks++;
+        }
+    }
+
+    /**
+     * PowerModelHostSimple does not account voltage scaling thus we do it here
+     */
+    private final class DVFSPowerModel extends PowerModelHostAbstract {
+        private static final class DVFSTuple {
+            /**
+             * Fraction is the fraction of DVFS which is applied (from 0 to 1)
+             * and time is the clock tick which that is applied.
+             */
+            public final double fraction, time;
+
+            public DVFSTuple(double fraction, double time) {
+                this.time = time;
+                this.fraction = fraction;
+            }
+        }
+
+        private final double maxPower;
+        private final double staticPower;
+
+        /**
+         * In each tick that we change the dvfs parameters, we should all one entry to
+         * this list
+         */
+        private final ArrayList<DVFSTuple> dvfsFractions = new ArrayList<>();
+
+        public DVFSPowerModel(final double maxPower, final double staticPower) {
+            super();
+            if (maxPower < staticPower) {
+                throw new IllegalArgumentException("maxPower has to be higher than staticPower");
+            }
+
+            this.maxPower = validatePower(maxPower, "maxPower");
+            this.staticPower = validatePower(staticPower, "staticPower");
+            // We start the simulation with full speed
+            dvfsFractions.add(new DVFSTuple(1, 0));
+        }
+
+        /**
+         * Each time we set DVFS to this host, this method shall be called
+         * 
+         * @param fraction Fraction of the DVFS factor
+         * @param time     The time in simulation tick that we have applied this dvfs
+         */
+        public void addDvfsTick(double fraction, double time) {
+            if (fraction > 1)
+                throw new IllegalArgumentException("fraction must be smaller or equal to one");
+            dvfsFractions.add(new DVFSTuple(fraction, time));
+        }
+
+        @Override
+        public PowerMeasurement getPowerMeasurement() {
+            final var host = getHost();
+            if (!host.isActive()) {
+                return new PowerMeasurement();
+            }
+
+            final double usageFraction = host.getCpuMipsUtilization() / host.getTotalMipsCapacity();
+            return new PowerMeasurement(staticPower, dynamicPower(usageFraction));
+        }
+
+        @Override
+        public double getPowerInternal(final double utilizationFraction) {
+            return staticPower + dynamicPower(utilizationFraction);
+        }
+
+        /**
+         * Computes the dynamic power consumed according to the CPU utilization
+         * percentage.
+         * 
+         * @param utilizationFraction the utilization percentage (between [0 and 1]) of
+         *                            the host.
+         * @return the dynamic power supply in Watts (W)
+         */
+        private double dynamicPower(final double utilizationFraction) {
+            if (lastDeadline < dvfsFractions.get(dvfsFractions.size() - 1).time)
+                throw new RuntimeException("total runtime is less than last dvfs time: " + lastDeadline + " and "
+                        + dvfsFractions.get(dvfsFractions.size() - 1).time);
+            double dvfsFraction = 0;
+            // Do weighted average
+            for (int i = 1; i < dvfsFractions.size(); i++)
+                dvfsFraction += dvfsFractions.get(i - 1).fraction
+                        * (dvfsFractions.get(i).time - dvfsFractions.get(i - 1).time);
+            dvfsFraction += dvfsFractions.get(dvfsFractions.size() - 1).fraction
+                    * (lastDeadline - dvfsFractions.get(dvfsFractions.size() - 1).time);
+            dvfsFraction /= lastDeadline;
+            if (dvfsFraction > 1)
+                throw new RuntimeException("more than 1 dvfs factor of " + dvfsFraction);
+            // throw new RuntimeException("factor: " + dvfsFraction);
+            return (maxPower - staticPower) * utilizationFraction * Math.pow(dvfsFraction, 3);
         }
     }
 }

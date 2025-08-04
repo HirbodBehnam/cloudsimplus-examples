@@ -75,7 +75,7 @@ public final class LowPower {
     /**
      * We can multiply the frequency of each PE by this value
      */
-    public static final double MAX_DVS_RATIO = 0.7;
+    public static final double MIN_DVS_RATIO = 0.7;
 
     /**
      * For a set of hosts, writes their CPU utlization
