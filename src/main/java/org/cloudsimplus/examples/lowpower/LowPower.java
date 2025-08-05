@@ -11,11 +11,12 @@ import org.cloudsimplus.cloudlets.Cloudlet;
 import org.cloudsimplus.cloudlets.CloudletSimple;
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
+import org.cloudsimplus.distributions.ExponentialDistr;
 import org.cloudsimplus.distributions.PoissonDistr;
 import org.cloudsimplus.hosts.Host;
 import org.cloudsimplus.listeners.CloudletVmEventInfo;
 import org.cloudsimplus.listeners.EventListener;
-import org.cloudsimplus.schedulers.cloudlet.CloudletSchedulerTimeShared;
+import org.cloudsimplus.schedulers.cloudlet.CloudletSchedulerSpaceShared;
 import org.cloudsimplus.utilizationmodels.UtilizationModel;
 import org.cloudsimplus.utilizationmodels.UtilizationModelDynamic;
 import org.cloudsimplus.vms.HostResourceStats;
@@ -35,7 +36,7 @@ public final class LowPower {
     public static final long VM_BW = 100000;
     public static final int VM_PES_NUM = HOST_NUMBER_OF_PES; // number of cpus
 
-    public static final long CLOUDLET_LENGHT = 1500;
+    public static final long CLOUDLET_LENGHT = 15000;
     public static final long CLOUDLET_FILESIZE = 300 * 1024;
     public static final long CLOUDLET_OUTPUTSIZE = 300 * 1024;
     public static final double CLOUDLET_CPU_USAGE_PERCENT = 0.75;
@@ -48,8 +49,12 @@ public final class LowPower {
      * will be assigned to each VM.
      */
     public static final int VMS = HOSTS * DATACENTERS;
-    public static final int CLOUDLETS = 5 * VMS;
-    public static final int SCHEDULE_TIME_TO_PROCESS_DATACENTER_EVENTS = 5;
+    public static final int CLOUDLETS = 10 * VMS;
+    /**
+     * The rate of cloudlet creation. (This many tasks per interval)
+     */
+    public static final double CLOUDLET_ARRIVAL_INTERVAL = 1;
+    public static final double CLOUDLET_DEADLINE_SLACK = 20;
     /**
      * Equation 15 looks wrong to me so I changed it. At the very first, the
      * workload
@@ -76,6 +81,8 @@ public final class LowPower {
      * We can multiply the frequency of each PE by this value
      */
     public static final double MIN_DVS_RATIO = 0.7;
+
+    public static final double EXTERNAL_DATACENTER_SCHEDULE_PENALTY = 10;
 
     /**
      * For a set of hosts, writes their CPU utlization
@@ -104,7 +111,8 @@ public final class LowPower {
     }
 
     static void printTaskInformation(final List<CloudletDedline> tasks) {
-        System.out.println("Task ID,VM ID,Host ID,Datacenter ID,Closest Datacenter,Arrival Time,Start Time,Finish Time,Deadline,Failed Count,Failed");
+        System.out.println(
+                "Task ID,VM ID,Host ID,Datacenter ID,Closest Datacenter,Arrival Time,Start Time,Finish Time,Deadline,Failed Count,Failed");
         int failedCount = 0;
         for (CloudletDedline task : tasks) {
             boolean failed = task.isFailed();
@@ -137,7 +145,7 @@ public final class LowPower {
                     VM_MIPS[rng.nextInt(VM_MIPS.length)],
                     VM_PES_NUM, maximumTasks)
                     .setRam(VM_RAM).setBw(VM_BW).setSize(VM_SIZE)
-                    .setCloudletScheduler(new CloudletSchedulerTimeShared());
+                    .setCloudletScheduler(new CloudletSchedulerSpaceShared());
             vm.enableUtilizationStats();
             vmList.add(vm);
         }
@@ -149,13 +157,16 @@ public final class LowPower {
      */
     static void createCloudlets(List<CloudletDedline> cloudletList,
             EventListener<CloudletVmEventInfo> onFinishListener) {
-        long currentArrivalTime = 0;
+        double currentArrivalTime = 0;
+        final ExponentialDistr arrivalTimeIntervals = new ExponentialDistr(CLOUDLET_ARRIVAL_INTERVAL);
         final UtilizationModel um = new UtilizationModelDynamic(UtilizationModel.Unit.ABSOLUTE, 50);
+
         for (int i = 1; i <= CLOUDLETS; i++) {
             UtilizationModelDynamic cpuUtilizationModel = new UtilizationModelDynamic(
                     CLOUDLET_CPU_USAGE_PERCENT);
 
-            final long deadline = 25 + rng.nextInt(25) + currentArrivalTime;
+            final double deadline = CLOUDLET_DEADLINE_SLACK + rng.nextInt((int) CLOUDLET_DEADLINE_SLACK)
+                    + currentArrivalTime;
             final int closestDatacenter = rng.nextInt(DATACENTERS) + 1;
             final CloudletDedline c = (CloudletDedline) new CloudletDedline(
                     i, CLOUDLET_LENGHT, 1, deadline, currentArrivalTime, closestDatacenter)
@@ -166,7 +177,7 @@ public final class LowPower {
                     .setUtilizationModelBw(um);
             c.addOnFinishListener(onFinishListener);
             // Random arrival time
-            currentArrivalTime += rng.nextInt(5);
+            currentArrivalTime += arrivalTimeIntervals.sample();
             cloudletList.add(c);
         }
     }
@@ -289,6 +300,7 @@ public final class LowPower {
         /**
          * This method will check if the task has failed based on its deadline and
          * status.
+         * 
          * @return True if the task has failed
          */
         public boolean isFailed() {
@@ -298,8 +310,12 @@ public final class LowPower {
             // Manually failed task
             if (failed)
                 return true;
+            // Scheduled outside datacenter?
+            final double exeternalDatacenterPenalty = getVm().getHost().getDatacenter().getId() != closestDatacenter
+                    ? EXTERNAL_DATACENTER_SCHEDULE_PENALTY
+                    : 0;
             // Check deadline
-            return getFinishTime() > deadline; 
+            return getFinishTime() + exeternalDatacenterPenalty > deadline;
         }
     }
 
