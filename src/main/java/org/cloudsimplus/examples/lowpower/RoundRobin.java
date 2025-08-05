@@ -51,7 +51,7 @@ public final class RoundRobin {
         // DatacenterBrokerSimple is basically round robin
         broker = new RoundRobinDatacenterAllocator(simulation);
 
-        LowPower.createAndSubmitVms(broker, vmList);
+        LowPower.createAndSubmitVms(broker, vmList, true);
         LowPower.createCloudlets(cloudletList, this::taskFinishedCallback);
         // We must at least submit one cloudlet apparently
         simulation.terminateAt(cloudletList.stream().mapToDouble(CloudletDedline::getDeadline).max().orElseThrow());

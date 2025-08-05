@@ -17,6 +17,7 @@ import org.cloudsimplus.hosts.Host;
 import org.cloudsimplus.listeners.CloudletVmEventInfo;
 import org.cloudsimplus.listeners.EventListener;
 import org.cloudsimplus.schedulers.cloudlet.CloudletSchedulerSpaceShared;
+import org.cloudsimplus.schedulers.cloudlet.CloudletSchedulerTimeShared;
 import org.cloudsimplus.utilizationmodels.UtilizationModel;
 import org.cloudsimplus.utilizationmodels.UtilizationModelDynamic;
 import org.cloudsimplus.vms.HostResourceStats;
@@ -54,7 +55,7 @@ public final class LowPower {
      * The rate of cloudlet creation. (This many tasks per interval)
      */
     public static final double CLOUDLET_ARRIVAL_INTERVAL = 1;
-    public static final double CLOUDLET_DEADLINE_SLACK = 20;
+    public static final double CLOUDLET_DEADLINE_SLACK = 25;
     /**
      * Equation 15 looks wrong to me so I changed it. At the very first, the
      * workload
@@ -82,7 +83,7 @@ public final class LowPower {
      */
     public static final double MIN_DVS_RATIO = 0.7;
 
-    public static final double EXTERNAL_DATACENTER_SCHEDULE_PENALTY = 10;
+    public static final double EXTERNAL_DATACENTER_SCHEDULE_PENALTY = 15;
 
     /**
      * For a set of hosts, writes their CPU utlization
@@ -138,14 +139,14 @@ public final class LowPower {
     /**
      * Creates the virtual machines to run on each host
      */
-    static void createAndSubmitVms(DatacenterBroker broker, List<Vm> vmList) {
+    static void createAndSubmitVms(DatacenterBroker broker, List<Vm> vmList, boolean queued) {
         for (int i = 0; i < VMS; i++) {
-            final int maximumTasks = rng.nextInt(2, 4);
+            final int maximumTasks = rng.nextInt(1, 3);
             final Vm vm = new VmWithTaskCounter(vmList.size(),
                     VM_MIPS[rng.nextInt(VM_MIPS.length)],
                     VM_PES_NUM, maximumTasks)
                     .setRam(VM_RAM).setBw(VM_BW).setSize(VM_SIZE)
-                    .setCloudletScheduler(new CloudletSchedulerSpaceShared());
+                    .setCloudletScheduler(queued ? new CloudletSchedulerSpaceShared() : new CloudletSchedulerTimeShared());
             vm.enableUtilizationStats();
             vmList.add(vm);
         }
