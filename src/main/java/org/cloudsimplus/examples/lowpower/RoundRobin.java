@@ -76,7 +76,7 @@ public final class RoundRobin {
             }
             // Create the physical machine
             final var host = new HostSimple(LowPower.HOST_RAM, LowPower.HOST_BW, LowPower.HOST_STORAGE, peList);
-            host.setPowerModel(new PowerModelHostSimple(1000, 700));
+            host.setPowerModel(new PowerModelHostSimple(1000, 100));
             host.setRamProvisioner(new ResourceProvisionerSimple());
             host.setBwProvisioner(new ResourceProvisionerSimple());
             host.setVmScheduler(new VmSchedulerTimeShared());

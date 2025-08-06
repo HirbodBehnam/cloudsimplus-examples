@@ -26,7 +26,7 @@ import org.cloudsimplus.vms.VmSimple;
 
 public final class LowPower {
     public static final int HOST_MIPS_BY_PE = 3000;
-    public static final int HOST_NUMBER_OF_PES = 1;
+    public static final int HOST_NUMBER_OF_PES = 4;
     public static final long HOST_RAM = 8 * 1024; // host memory (MB)
     public static final long HOST_STORAGE = 1024 * 1024; // host storage
     public static final long HOST_BW = 100000000L;
@@ -141,10 +141,11 @@ public final class LowPower {
      */
     static void createAndSubmitVms(DatacenterBroker broker, List<Vm> vmList, boolean queued) {
         for (int i = 0; i < VMS; i++) {
-            final int maximumTasks = rng.nextInt(1, 3);
+            final int maximumTasks = rng.nextInt(2, 3);
+            final int peNums = queued ? 1 : maximumTasks;
             final Vm vm = new VmWithTaskCounter(vmList.size(),
                     VM_MIPS[rng.nextInt(VM_MIPS.length)],
-                    VM_PES_NUM, maximumTasks)
+                    VM_PES_NUM * peNums, maximumTasks)
                     .setRam(VM_RAM).setBw(VM_BW).setSize(VM_SIZE)
                     .setCloudletScheduler(queued ? new CloudletSchedulerSpaceShared() : new CloudletSchedulerTimeShared());
             vm.enableUtilizationStats();
