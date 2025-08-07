@@ -1,0 +1,11 @@
+Round Robin:
+Failure rate: 0.22233333333333333 %
+Total power: 30420.261537 W
+
+SLA No DVS:
+Failure rate: 0.12966666666666668 %
+Total power: 30106.500036 W
+
+SLA With DVS:
+Failure rate: 0.141 %
+Total power: 30086.553493 W

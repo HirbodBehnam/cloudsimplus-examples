@@ -69,10 +69,9 @@ public final class SLADVSAlgorithm {
         simulation.addOnClockTickListener(this::simulationTick);
         simulation.start();
 
-        LowPower.printTaskInformation(cloudletList);
-
-        LowPower.printHostsCpuUtilizationAndPowerConsumption(allHostList);
-        System.out.println(getClass().getSimpleName() + " finished!");
+        LowPower.reportTaskInformation(cloudletList);
+        LowPower.reportHostsCpuUtilizationAndPowerConsumption(allHostList);
+        LowPower.reportTimedMetrics();
     }
 
     private Datacenter createDatacenter() {

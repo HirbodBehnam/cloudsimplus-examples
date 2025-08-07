@@ -1,9 +1,13 @@
 package org.cloudsimplus.examples.lowpower;
 
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Random;
+import java.util.TreeMap;
 
 import org.cloudsimplus.brokers.DatacenterBroker;
 import org.cloudsimplus.brokers.DatacenterBrokerSimple;
@@ -84,7 +88,7 @@ public final class LowPower {
      */
     public static final double MIN_DVS_RATIO = 0.7;
 
-    public static final double EXTERNAL_DATACENTER_SCHEDULE_PENALTY = 15;
+    public static final double EXTERNAL_DATACENTER_SCHEDULE_PENALTY = 20;
 
     private static class SimulationStatistics {
         private final long failedTasks;
@@ -99,57 +103,92 @@ public final class LowPower {
     /**
      * We keep the statics related to the simulation here
      */
-    private static final HashMap<Integer, SimulationStatistics> STATISTICS = new HashMap<>();
+    private static final TreeMap<Integer, SimulationStatistics> STATISTICS = new TreeMap<>();
 
     /**
      * For a set of hosts, writes their CPU utlization
      * 
      * @param hostList The list to print their CPU utilization
      */
-    static void printHostsCpuUtilizationAndPowerConsumption(final List<Host> hostList) {
-        double totalPower = 0;
-        System.out.println("Host ID,Datacenter ID,CPU Usage Mean,Power Consumption Mean");
-        for (final Host host : hostList) {
-            final HostResourceStats cpuStats = host.getCpuUtilizationStats();
+    static void reportHostsCpuUtilizationAndPowerConsumption(final List<Host> hostList) {
+        try {
+            PrintWriter outputFile = new PrintWriter(new FileWriter("reports/host.csv"));
+            double totalPower = 0;
+            outputFile.println("Host ID,Datacenter ID,CPU Usage Mean,Power Consumption Mean");
+            for (final Host host : hostList) {
+                final HostResourceStats cpuStats = host.getCpuUtilizationStats();
 
-            // The total Host's CPU utilization for the time specified by the map key
-            final double utilizationPercentMean = cpuStats.getMean();
-            final double watts = host.getPowerModel().getPower(utilizationPercentMean);
-            totalPower += watts;
-            System.out.printf(
-                    "%d,%d,%f,%f\n",
-                    host.getId(),
-                    host.getDatacenter().getId(),
-                    utilizationPercentMean * 100,
-                    watts);
+                // The total Host's CPU utilization for the time specified by the map key
+                final double utilizationPercentMean = cpuStats.getMean();
+                final double watts = host.getPowerModel().getPower(utilizationPercentMean);
+                totalPower += watts;
+                outputFile.printf(
+                        "%d,%d,%f,%f\n",
+                        host.getId(),
+                        host.getDatacenter().getId(),
+                        utilizationPercentMean * 100,
+                        watts);
+            }
+            System.out.printf("Total power: %f W\n", totalPower);
+            outputFile.close();
+        } catch (IOException e) {
+            System.out.println("Cannot write host report");
+            e.printStackTrace();
         }
-        System.out.printf("Total power: %f W\n", totalPower);
-        System.out.println();
     }
 
-    static void printTaskInformation(final List<CloudletDedline> tasks) {
-        System.out.println(
-                "Task ID,VM ID,Host ID,Datacenter ID,Closest Datacenter,Arrival Time,Start Time,Finish Time,Deadline,Failed Count,Failed");
-        int failedCount = 0;
-        for (CloudletDedline task : tasks) {
-            boolean failed = task.isFailed();
-            System.out.printf("%d,%d,%d,%d,%d,%f,%f,%f,%f,%d,%d\n",
-                    task.getId(),
-                    task.getVm().getId(),
-                    task.getVm().getHost().getId(),
-                    task.getVm().getHost().getDatacenter().getId(),
-                    task.getClosestDatacenter(),
-                    task.getArrivalTime(),
-                    task.getStartTime(),
-                    task.getFinishTime(),
-                    task.getDeadline(),
-                    task.getFailedCount(),
-                    failed ? 1 : 0);
-            if (failed)
-                failedCount++;
+    /**
+     * Report information about each task as a csv file
+     * 
+     * @param tasks List of tasks
+     */
+    static void reportTaskInformation(final List<CloudletDedline> tasks) {
+        try {
+            PrintWriter outputFile = new PrintWriter(new FileWriter("reports/tasks.csv"));
+            outputFile.println(
+                    "Task ID,VM ID,Host ID,Datacenter ID,Closest Datacenter,Arrival Time,Start Time,Finish Time,Deadline,Failed Count,Failed");
+            int failedCount = 0;
+            for (CloudletDedline task : tasks) {
+                boolean failed = task.isFailed();
+                outputFile.printf("%d,%d,%d,%d,%d,%f,%f,%f,%f,%d,%d\n",
+                        task.getId(),
+                        task.getVm().getId(),
+                        task.getVm().getHost().getId(),
+                        task.getVm().getHost().getDatacenter().getId(),
+                        task.getClosestDatacenter(),
+                        task.getArrivalTime(),
+                        task.getStartTime(),
+                        task.getFinishTime(),
+                        task.getDeadline(),
+                        task.getFailedCount(),
+                        failed ? 1 : 0);
+                if (failed)
+                    failedCount++;
+            }
+            System.out.println("Failure rate: " + ((double) failedCount) / tasks.size() + " %");
+            outputFile.close();
+        } catch (IOException e) {
+            System.out.println("Cannot write task report");
+            e.printStackTrace();
         }
-        System.out.println("Failure rate: " + ((double) failedCount) / tasks.size());
-        System.out.println();
+    }
+
+    /**
+     * Reports data saved in STATISTICS to a file
+     */
+    static void reportTimedMetrics() {
+        try {
+            PrintWriter outputFile = new PrintWriter(new FileWriter("reports/timed-stats.csv"));
+            outputFile.println("Tick,Power,Failed");
+            for (final var entry : STATISTICS.entrySet()) {
+                outputFile.printf("%d,%f,%d\n",
+                        entry.getKey(), entry.getValue().powerConsumption, entry.getValue().failedTasks);
+            }
+            outputFile.close();
+        } catch (IOException e) {
+            System.out.println("Cannot write task report");
+            e.printStackTrace();
+        }
     }
 
     /**
@@ -214,7 +253,7 @@ public final class LowPower {
         STATISTICS.put(currentTime, new SimulationStatistics(
                 tasks.stream().filter(t -> t.getStatus() == Status.SUCCESS && t.isFailed()).count(),
                 hosts.stream().mapToDouble(h -> h.getPowerModel().getPower(h.getCpuUtilizationStats().getMean()))
-                        .average().orElse(0)));
+                        .filter(p -> !Double.isNaN(p)).average().orElse(0)));
     }
 
     /**
