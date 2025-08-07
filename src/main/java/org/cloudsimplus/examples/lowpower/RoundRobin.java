@@ -53,9 +53,13 @@ public final class RoundRobin {
 
         LowPower.createAndSubmitVms(broker, vmList, true);
         LowPower.createCloudlets(cloudletList, this::taskFinishedCallback);
+
         // We must at least submit one cloudlet apparently
-        simulation.terminateAt(cloudletList.stream().mapToDouble(CloudletDedline::getDeadline).max().orElseThrow());
         broker.submitCloudlet(cloudletList.get(0));
+
+        final double terminationTime = cloudletList.stream().mapToDouble(CloudletDedline::getDeadline).max()
+                .orElseThrow();
+        simulation.terminateAt(terminationTime);
 
         simulation.addOnClockTickListener(this::simulationTick);
         simulation.start();
@@ -110,6 +114,9 @@ public final class RoundRobin {
      */
     private void simulationTick(EventInfo event) {
         System.out.println("TICK " + event.getTime());
+
+        LowPower.logStatistics((int) event.getTime(), cloudletList, allHostList);
+
         for (Cloudlet task : cloudletList) {
             if (event.getTime() >= ((LowPower.CloudletDedline) task).getArrivalTime()
                     && task.getStatus() == Status.INSTANTIATED) {

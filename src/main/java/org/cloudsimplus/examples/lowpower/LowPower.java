@@ -8,6 +8,7 @@ import java.util.Random;
 import org.cloudsimplus.brokers.DatacenterBroker;
 import org.cloudsimplus.brokers.DatacenterBrokerSimple;
 import org.cloudsimplus.cloudlets.Cloudlet;
+import org.cloudsimplus.cloudlets.Cloudlet.Status;
 import org.cloudsimplus.cloudlets.CloudletSimple;
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
@@ -26,7 +27,7 @@ import org.cloudsimplus.vms.VmSimple;
 
 public final class LowPower {
     public static final int HOST_MIPS_BY_PE = 3000;
-    public static final int HOST_NUMBER_OF_PES = 4;
+    public static final int HOST_NUMBER_OF_PES = 1;
     public static final long HOST_RAM = 8 * 1024; // host memory (MB)
     public static final long HOST_STORAGE = 1024 * 1024; // host storage
     public static final long HOST_BW = 100000000L;
@@ -85,6 +86,21 @@ public final class LowPower {
 
     public static final double EXTERNAL_DATACENTER_SCHEDULE_PENALTY = 15;
 
+    private static class SimulationStatistics {
+        private final long failedTasks;
+        private final double powerConsumption;
+
+        public SimulationStatistics(long failedTasks, double powerConsumption) {
+            this.failedTasks = failedTasks;
+            this.powerConsumption = powerConsumption;
+        }
+    }
+
+    /**
+     * We keep the statics related to the simulation here
+     */
+    private static final HashMap<Integer, SimulationStatistics> STATISTICS = new HashMap<>();
+
     /**
      * For a set of hosts, writes their CPU utlization
      * 
@@ -142,12 +158,12 @@ public final class LowPower {
     static void createAndSubmitVms(DatacenterBroker broker, List<Vm> vmList, boolean queued) {
         for (int i = 0; i < VMS; i++) {
             final int maximumTasks = rng.nextInt(2, 3);
-            final int peNums = queued ? 1 : maximumTasks;
             final Vm vm = new VmWithTaskCounter(vmList.size(),
                     VM_MIPS[rng.nextInt(VM_MIPS.length)],
-                    VM_PES_NUM * peNums, maximumTasks)
+                    VM_PES_NUM, maximumTasks)
                     .setRam(VM_RAM).setBw(VM_BW).setSize(VM_SIZE)
-                    .setCloudletScheduler(queued ? new CloudletSchedulerSpaceShared() : new CloudletSchedulerTimeShared());
+                    .setCloudletScheduler(
+                            queued ? new CloudletSchedulerSpaceShared() : new CloudletSchedulerTimeShared());
             vm.enableUtilizationStats();
             vmList.add(vm);
         }
@@ -182,6 +198,23 @@ public final class LowPower {
             currentArrivalTime += arrivalTimeIntervals.sample();
             cloudletList.add(c);
         }
+    }
+
+    /**
+     * Logs the statistics of a simulation tick
+     */
+    static void logStatistics(int currentTime, final List<CloudletDedline> tasks, final List<Host> hosts) {
+        // Do not log the first second
+        if (currentTime == 0)
+            return;
+        // Do not re-insert
+        if (STATISTICS.containsKey(currentTime))
+            return;
+
+        STATISTICS.put(currentTime, new SimulationStatistics(
+                tasks.stream().filter(t -> t.getStatus() == Status.SUCCESS && t.isFailed()).count(),
+                hosts.stream().mapToDouble(h -> h.getPowerModel().getPower(h.getCpuUtilizationStats().getMean()))
+                        .average().orElse(0)));
     }
 
     /**

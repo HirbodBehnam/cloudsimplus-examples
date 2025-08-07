@@ -58,11 +58,13 @@ public final class SLADVSAlgorithm {
 
         LowPower.createAndSubmitVms(broker, vmList, false);
         LowPower.createCloudlets(cloudletList, this::taskFinishedCallback);
+
         // We must at least submit one cloudlet apparently
+        broker.submitCloudlet(cloudletList.get(0));
+
         lastDeadline = cloudletList.stream().mapToDouble(CloudletDedline::getDeadline).max().orElseThrow();
         simulation.terminateAt(lastDeadline);
         processedTicks = new HashSet<>((int) lastDeadline);
-        broker.submitCloudlet(cloudletList.get(0));
 
         simulation.addOnClockTickListener(this::simulationTick);
         simulation.start();
@@ -130,6 +132,9 @@ public final class SLADVSAlgorithm {
      */
     private void simulationTick(EventInfo event) {
         System.out.println("TICK " + event.getTime());
+
+        LowPower.logStatistics((int) event.getTime(), cloudletList, allHostList);
+
         if ((long) event.getTime() % LowPower.T_p == 0 && !processedTicks.contains((long) event.getTime())) {
             // Referesh task priority
             for (Cloudlet c : cloudletList) {
